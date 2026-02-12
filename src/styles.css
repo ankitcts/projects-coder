@@ -1,0 +1,147 @@
+:root {
+  --bg: #f7f9fc;
+  --panel: #ffffff;
+  --border: #d7deea;
+  --text: #1c2433;
+  --muted: #6a7487;
+  --accent: #1d6ef2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background: linear-gradient(180deg, #f4f7ff 0%, #f9fbff 100%);
+  color: var(--text);
+}
+
+.platform {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.platform__header h1 {
+  margin: 0;
+  font-size: 1.8rem;
+}
+
+.platform__header p {
+  margin: 8px 0 18px;
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.toolbar {
+  margin-bottom: 12px;
+}
+
+.search {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.problem-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.problem-table th,
+.problem-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.problem-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.problem-statement {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.primary-btn,
+.ghost-btn {
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+
+.primary-btn {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.ghost-btn {
+  background: #fff;
+}
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.workspace__topbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.workspace__topbar select {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.workspace__grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.editor {
+  width: 100%;
+  min-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.console {
+  min-height: 280px;
+  background: #0f172a;
+  color: #c6d4ff;
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.status {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 900px) {
+  .workspace__grid {
+    grid-template-columns: 1fr;
+  }
+}

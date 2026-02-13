@@ -6,7 +6,7 @@ module.exports = merge(webCommon, {
   devtool: "cheap-module-source-map",
   mode: "development",
   devServer: {
-    port: 8081,
+    port: "auto",
     host: "localhost",
     hot: true,
   },

@@ -1,7 +1,6 @@
 const path = require("path");
 const webpack = require("webpack");
 const htmlWebpackPlugin = require("html-webpack-plugin");
-const miniCssExtractPlugin = require("mini-css-extract-plugin");
 const { CleanWebpackPlugin } = require("clean-webpack-plugin");
 
 module.exports = {
@@ -10,13 +9,16 @@ module.exports = {
     path: path.join(__dirname, "../public/"), // output dir
     filename: "bundle.js", // file name
   },
+  ignoreWarnings: [
+    (warning) =>
+      warning.message &&
+      warning.message.includes("Critical dependency: the request of a dependency is an expression") &&
+      warning.module &&
+      warning.module.resource &&
+      warning.module.resource.includes("node_modules/typescript/lib/typescript.js"),
+  ],
   plugins: [
     new CleanWebpackPlugin(),
-    new miniCssExtractPlugin({
-      filename: "main.css?[hash]",
-      chunkFilename: "[id].css",
-    }),
-
     new htmlWebpackPlugin({
       hash: true,
       filename: "index.html",
@@ -35,9 +37,6 @@ module.exports = {
       {
         test: /\.(css|scss)$/i,
         use: [
-          {
-            loader: miniCssExtractPlugin.loader,
-          },
           "style-loader",
           "css-loader",
           "sass-loader",

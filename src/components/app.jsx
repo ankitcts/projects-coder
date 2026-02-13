@@ -166,8 +166,17 @@ async function runPython(code) {
 }
 
 export function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "light");
+  const [problems, setProblems] = useState(PROBLEMS);
   const [searchText, setSearchText] = useState("");
   const [selectedProblem, setSelectedProblem] = useState(null);
+  const [showAddProblem, setShowAddProblem] = useState(false);
+  const [newProblem, setNewProblem] = useState({
+    title: "",
+    difficulty: "Easy",
+    source: "",
+    statement: "",
+  });
   const [language, setLanguage] = useState("js");
   const [codeByLanguage, setCodeByLanguage] = useState(DEFAULT_CODE);
   const [output, setOutput] = useState(["Pick a problem to begin."]);
@@ -179,10 +188,10 @@ export function App() {
     const query = searchText.trim().toLowerCase();
 
     if (!query) {
-      return PROBLEMS;
+      return problems;
     }
 
-    return PROBLEMS.filter((problem) => {
+    return problems.filter((problem) => {
       return (
         problem.title.toLowerCase().includes(query) ||
         problem.statement.toLowerCase().includes(query) ||
@@ -190,7 +199,7 @@ export function App() {
         problem.difficulty.toLowerCase().includes(query)
       );
     });
-  }, [searchText]);
+  }, [searchText, problems]);
 
   const currentCode = codeByLanguage[language];
 
@@ -217,6 +226,11 @@ export function App() {
   };
 
   useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
     if (!selectedProblem) {
       return;
     }
@@ -229,15 +243,50 @@ export function App() {
     return () => clearTimeout(debounceTimerRef.current);
   }, [selectedProblem, language, currentCode]);
 
+  const handleAddProblem = (event) => {
+    event.preventDefault();
+    const title = newProblem.title.trim();
+    const source = newProblem.source.trim();
+    const statement = newProblem.statement.trim();
+
+    if (!title || !source || !statement) {
+      return;
+    }
+
+    setProblems((prev) => [
+      {
+        id: `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now()}`,
+        title,
+        difficulty: newProblem.difficulty,
+        source,
+        statement,
+      },
+      ...prev,
+    ]);
+
+    setNewProblem({
+      title: "",
+      difficulty: "Easy",
+      source: "",
+      statement: "",
+    });
+    setShowAddProblem(false);
+  };
+
   return (
     <div className="platform">
       <header className="platform__header">
-        <h1>Live Coding Dashboard</h1>
+        <div className="platform__header-row">
+          <h1>Live Coding Dashboard</h1>
+          <button className="ghost-btn theme-toggle" onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
+            {theme === "light" ? "Dark Mode" : "Light Mode"}
+          </button>
+        </div>
         <p>Search a problem, open the editor, choose a language, and see output immediately.</p>
       </header>
 
       {!selectedProblem ? (
-        <section className="panel">
+        <section className="panel dashboard-panel">
           <div className="toolbar">
             <input
               className="search"
@@ -246,7 +295,65 @@ export function App() {
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
             />
+            <button className="primary-btn" onClick={() => setShowAddProblem((prev) => !prev)}>
+              {showAddProblem ? "Close" : "Add Problem"}
+            </button>
           </div>
+          {showAddProblem && (
+            <form className="add-problem-form" onSubmit={handleAddProblem}>
+              <input
+                type="text"
+                placeholder="Problem title"
+                value={newProblem.title}
+                onChange={(event) =>
+                  setNewProblem((prev) => ({
+                    ...prev,
+                    title: event.target.value,
+                  }))
+                }
+                required
+              />
+              <select
+                value={newProblem.difficulty}
+                onChange={(event) =>
+                  setNewProblem((prev) => ({
+                    ...prev,
+                    difficulty: event.target.value,
+                  }))
+                }
+              >
+                <option value="Easy">Easy</option>
+                <option value="Medium">Medium</option>
+                <option value="Hard">Hard</option>
+              </select>
+              <input
+                type="text"
+                placeholder="Source"
+                value={newProblem.source}
+                onChange={(event) =>
+                  setNewProblem((prev) => ({
+                    ...prev,
+                    source: event.target.value,
+                  }))
+                }
+                required
+              />
+              <textarea
+                placeholder="Problem statement"
+                value={newProblem.statement}
+                onChange={(event) =>
+                  setNewProblem((prev) => ({
+                    ...prev,
+                    statement: event.target.value,
+                  }))
+                }
+                required
+              />
+              <button className="primary-btn" type="submit">
+                Save Problem
+              </button>
+            </form>
+          )}
 
           <table className="problem-table">
             <thead>
@@ -259,13 +366,21 @@ export function App() {
             </thead>
             <tbody>
               {visibleProblems.map((problem) => (
-                <tr key={problem.id}>
+                <tr key={problem.id} className="problem-row">
                   <td>
                     <div className="problem-title">{problem.title}</div>
                     <div className="problem-statement">{problem.statement}</div>
                   </td>
-                  <td>{problem.difficulty}</td>
-                  <td>{problem.source}</td>
+                  <td>
+                    <span
+                      className={`difficulty-badge difficulty-badge--${problem.difficulty.toLowerCase()}`}
+                    >
+                      {problem.difficulty}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="source-chip">{problem.source}</span>
+                  </td>
                   <td>
                     <button className="primary-btn" onClick={() => setSelectedProblem(problem)}>
                       Open
@@ -302,25 +417,25 @@ export function App() {
             <button className="primary-btn" onClick={executeCode}>
               Run
             </button>
-            {isRunning && <span className="status">Running...</span>}
+            {isRunning && <span className="status status--running">Running...</span>}
           </div>
 
           <div className="workspace__grid">
-            <article className="panel">
-              <h2>{selectedProblem.title}</h2>
+            <article className="panel problem-panel">
+              <h2 className="panel-title">{selectedProblem.title}</h2>
               <p>{selectedProblem.statement}</p>
               <p>
                 <strong>Difficulty:</strong> {selectedProblem.difficulty}
               </p>
             </article>
 
-            <article className="panel">
-              <h2>Editor ({language})</h2>
+            <article className="panel editor-panel">
+              <h2 className="panel-title">Editor ({language})</h2>
               <div className="editor">
                 <Editor
                   height="320px"
                   language={MONACO_LANGUAGE_BY_ID[language]}
-                  theme="vs-light"
+                  theme={theme === "dark" ? "vs-dark" : "vs-light"}
                   value={currentCode}
                   options={{
                     minimap: { enabled: false },
@@ -338,8 +453,8 @@ export function App() {
               </div>
             </article>
 
-            <article className="panel">
-              <h2>Console Output</h2>
+            <article className="panel console-panel">
+              <h2 className="panel-title">Console Output</h2>
               <pre className="console">{output.join("\n")}</pre>
             </article>
           </div>

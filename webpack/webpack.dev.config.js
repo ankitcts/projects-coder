@@ -9,6 +9,12 @@ module.exports = merge(webCommon, {
     port: "auto",
     host: "localhost",
     hot: true,
+    proxy: [
+      {
+        context: ["/api"],
+        target: "http://localhost:4000",
+      },
+    ],
   },
   plugins: [new webpack.HotModuleReplacementPlugin({})],
 });

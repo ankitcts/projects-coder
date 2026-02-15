@@ -10,60 +10,22 @@ const LANGUAGES = [
 
 const STATUS_OPTIONS = ["Active", "Disabled", "Redundant"];
 
-const INITIAL_CLIENTS = [
-  { id: "acme", name: "Acme Corporation", abbreviation: "ACM" },
-  { id: "globex", name: "Globex Corporation", abbreviation: "GLX" },
-  { id: "initech", name: "Initech", abbreviation: "INT" },
-  { id: "umbrella", name: "Umbrella Corp", abbreviation: "UMB" },
-  { id: "wayne", name: "Wayne Enterprises", abbreviation: "WNE" },
-];
-
 const MONACO_LANGUAGE_BY_ID = {
   js: "javascript",
   ts: "typescript",
   python: "python",
 };
 
+const LANGUAGE_LABEL_BY_ID = LANGUAGES.reduce((acc, language) => {
+  acc[language.id] = language.label;
+  return acc;
+}, {});
+
 const DEFAULT_CODE = {
   js: `function solve(input) {\n  console.log("Input:", input);\n  return input.length;\n}\n\nsolve("hello world");`,
   ts: `type Input = string;\n\nfunction solve(input: Input): number {\n  console.log("Input:", input);\n  return input.length;\n}\n\nsolve("hello world");`,
   python: `def solve(text: str) -> int:\n    print("Input:", text)\n    return len(text)\n\nsolve("hello world")`,
 };
-
-const PROBLEMS = [
-  {
-    id: "sum-array",
-    title: "Sum of Array",
-    difficulty: "Easy",
-    clientId: "acme",
-    statement:
-      "Given an integer array, return the sum of all values. Handle empty arrays as 0.",
-  },
-  {
-    id: "valid-parentheses",
-    title: "Valid Parentheses",
-    difficulty: "Medium",
-    clientId: "globex",
-    statement:
-      "Given a string with only ()[]{} characters, determine if the sequence is valid.",
-  },
-  {
-    id: "longest-substring",
-    title: "Longest Unique Substring",
-    difficulty: "Medium",
-    clientId: "initech",
-    statement:
-      "Return length of the longest substring without repeating characters.",
-  },
-  {
-    id: "word-ladder",
-    title: "Word Ladder",
-    difficulty: "Hard",
-    clientId: "umbrella",
-    statement:
-      "Find the shortest transformation sequence between begin and end words.",
-  },
-];
 
 const DATE_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -86,7 +48,10 @@ const formatTimestamp = (value) => {
   return DATE_TIME_FORMAT.format(date);
 };
 
-const USER_PROGRESS_STORAGE_KEY = "single_user_problem_progress_v1";
+const SOLUTION_SELECTION_STORAGE_KEY = "single_user_solution_selection_v1";
+const RUNTIME_USER_ID_STORAGE_KEY = "runtime_user_id_v1";
+const LEGACY_SOLUTIONS_STORAGE_KEY = "single_user_problem_solutions_v1";
+const LEGACY_PROGRESS_STORAGE_KEY = "single_user_problem_progress_v1";
 
 const makeProblemForm = (defaultClientId = "") => ({
   title: "",
@@ -100,6 +65,171 @@ const makeClientForm = () => ({
   name: "",
   abbreviation: "",
 });
+
+const makeSolutionForm = () => ({
+  title: "",
+  tag: "",
+  content: "",
+});
+
+const getSolutionContextKey = (problemId, language) => {
+  if (!problemId || !language) {
+    return "";
+  }
+  return `${problemId}:${language}`;
+};
+
+const getOrCreateRuntimeUserId = () => {
+  if (typeof window === "undefined") {
+    return "runtime-user";
+  }
+
+  const existing = localStorage.getItem(RUNTIME_USER_ID_STORAGE_KEY);
+  if (existing) {
+    return existing;
+  }
+
+  const generated =
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? `runtime-${crypto.randomUUID()}`
+      : `runtime-${Date.now()}`;
+  localStorage.setItem(RUNTIME_USER_ID_STORAGE_KEY, generated);
+  return generated;
+};
+
+const mapSolutionsByContext = (solutions = []) => {
+  return solutions.reduce((acc, solution) => {
+    const key = getSolutionContextKey(solution.problemId, solution.language);
+    if (!key) {
+      return acc;
+    }
+
+    const normalized = {
+      id: solution.id,
+      problemId: solution.problemId,
+      title: solution.title,
+      tag: solution.tag || "General",
+      language: solution.language,
+      content: solution.content,
+      createdAt: solution.createdAt,
+      updatedAt: solution.updatedAt,
+    };
+
+    if (!acc[key]) {
+      acc[key] = [];
+    }
+    acc[key].push(normalized);
+    return acc;
+  }, {});
+};
+
+const mapProgressByProblem = (records = []) => {
+  return records.reduce((acc, record) => {
+    if (!record.problemId) {
+      return acc;
+    }
+
+    acc[record.problemId] = {
+      codeByLanguage: record.codeByLanguage || {},
+      language: record.language || "js",
+      output: Array.isArray(record.output) ? record.output : [],
+      updatedAt: record.updatedAtClient || record.updatedAt || new Date().toISOString(),
+    };
+    return acc;
+  }, {});
+};
+
+const parseLegacySolutions = () => {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const raw = localStorage.getItem(LEGACY_SOLUTIONS_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return [];
+    }
+
+    return Object.entries(parsed).flatMap(([contextKey, entries]) => {
+      if (!Array.isArray(entries)) {
+        return [];
+      }
+
+      const [problemId, language] = String(contextKey).split(":");
+      if (!problemId || !language) {
+        return [];
+      }
+
+      return entries
+        .filter((entry) => entry && entry.content)
+        .map((entry) => ({
+          problemId,
+          language,
+          title: String(entry.title || "").trim() || "Recovered Solution",
+          tag: String(entry.tag || "General").trim() || "General",
+          content: String(entry.content || ""),
+        }));
+    });
+  } catch (_error) {
+    return [];
+  }
+};
+
+const parseLegacyProgress = () => {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const raw = localStorage.getItem(LEGACY_PROGRESS_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+
+    return parsed;
+  } catch (_error) {
+    return {};
+  }
+};
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(path, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+
+  if (!response.ok) {
+    let message = `Request failed with status ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (payload?.message) {
+        message = payload.message;
+      }
+    } catch (_error) {
+      // Ignore json parse errors.
+    }
+    throw new Error(message);
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json();
+}
 
 let pyodideInstancePromise;
 
@@ -211,41 +341,48 @@ async function runPython(code) {
   }
 }
 
-const prepareInitialProblems = () => {
-  const now = new Date().toISOString();
-  return PROBLEMS.map((problem) => ({
-    ...problem,
-    status: problem.status || "Active",
-    createdAt: problem.createdAt || now,
-    updatedAt: problem.updatedAt || now,
-  }));
-};
-
 export function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "light");
   const [activePage, setActivePage] = useState("dashboard");
-  const [clients, setClients] = useState(INITIAL_CLIENTS);
-  const [problems, setProblems] = useState(prepareInitialProblems);
+  const [clients, setClients] = useState([]);
+  const [problems, setProblems] = useState([]);
+  const [isDataLoading, setIsDataLoading] = useState(true);
+  const [dataError, setDataError] = useState("");
   const [searchText, setSearchText] = useState("");
   const [selectedProblem, setSelectedProblem] = useState(null);
   const [isProblemModalOpen, setIsProblemModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState("add");
   const [editingProblemId, setEditingProblemId] = useState(null);
-  const [problemForm, setProblemForm] = useState(makeProblemForm(INITIAL_CLIENTS[0]?.id || ""));
+  const [isSolutionModalOpen, setIsSolutionModalOpen] = useState(false);
+  const [solutionModalProblemId, setSolutionModalProblemId] = useState(null);
+  const [solutionModalLanguage, setSolutionModalLanguage] = useState("js");
+  const [editingModalSolutionId, setEditingModalSolutionId] = useState(null);
+  const [problemForm, setProblemForm] = useState(makeProblemForm(""));
   const [clientForm, setClientForm] = useState(makeClientForm);
   const [language, setLanguage] = useState("js");
+  const [isSolutionsDrawerOpen, setIsSolutionsDrawerOpen] = useState(false);
+  const [solutionsDrawerSide, setSolutionsDrawerSide] = useState("left");
+  const [solutionsDrawerWidth, setSolutionsDrawerWidth] = useState(40);
+  const [runtimeUserId] = useState(getOrCreateRuntimeUserId);
+  const [isMobileViewport, setIsMobileViewport] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth <= 1024 : false
+  );
   const [codeByLanguage, setCodeByLanguage] = useState(DEFAULT_CODE);
   const [output, setOutput] = useState(["Pick a problem to begin."]);
-  const [problemProgress, setProblemProgress] = useState(() => {
+  const [solutionModalForm, setSolutionModalForm] = useState(makeSolutionForm);
+  const [problemSolutions, setProblemSolutions] = useState({});
+  const [selectedSolutionByContext, setSelectedSolutionByContext] = useState(() => {
     try {
-      const raw = localStorage.getItem(USER_PROGRESS_STORAGE_KEY);
+      const raw = localStorage.getItem(SOLUTION_SELECTION_STORAGE_KEY);
       return raw ? JSON.parse(raw) : {};
     } catch (error) {
       return {};
     }
   });
+  const [problemProgress, setProblemProgress] = useState({});
   const [isRunning, setIsRunning] = useState(false);
   const debounceTimerRef = useRef();
+  const progressPersistTimerRef = useRef();
   const runTokenRef = useRef(0);
 
   const clientsById = useMemo(() => {
@@ -261,6 +398,92 @@ export function App() {
       return acc;
     }, {});
   }, [problems]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadData = async () => {
+      try {
+        setIsDataLoading(true);
+        setDataError("");
+
+        const [fetchedClients, fetchedProblems, fetchedSolutions, fetchedProgress] = await Promise.all([
+          apiRequest("/api/clients"),
+          apiRequest("/api/problems"),
+          apiRequest("/api/solutions"),
+          apiRequest(`/api/progress?userId=${encodeURIComponent(runtimeUserId)}`),
+        ]);
+
+        if (!isMounted) {
+          return;
+        }
+
+        let nextSolutions = fetchedSolutions || [];
+        let nextProgress = fetchedProgress || [];
+
+        if (!nextProgress.length) {
+          const legacyProgress = parseLegacyProgress();
+          const progressEntries = Object.entries(legacyProgress);
+          if (progressEntries.length) {
+            await Promise.all(
+              progressEntries.map(([problemId, payload]) =>
+                apiRequest(`/api/progress/${problemId}`, {
+                  method: "PUT",
+                  body: JSON.stringify({
+                    userId: runtimeUserId,
+                    codeByLanguage: payload?.codeByLanguage || {},
+                    language: payload?.language || "js",
+                    output: Array.isArray(payload?.output) ? payload.output : [],
+                    updatedAt: payload?.updatedAt || new Date().toISOString(),
+                  }),
+                }).catch(() => null)
+              )
+            );
+            nextProgress = await apiRequest(`/api/progress?userId=${encodeURIComponent(runtimeUserId)}`);
+          }
+        }
+
+        if (!nextSolutions.length) {
+          const legacySolutions = parseLegacySolutions();
+          if (legacySolutions.length) {
+            await Promise.all(
+              legacySolutions.map((solution) =>
+                apiRequest("/api/solutions", {
+                  method: "POST",
+                  body: JSON.stringify(solution),
+                }).catch(() => null)
+              )
+            );
+            nextSolutions = await apiRequest("/api/solutions");
+          }
+        }
+
+        setClients(fetchedClients || []);
+        setProblems(fetchedProblems || []);
+        setProblemSolutions(mapSolutionsByContext(nextSolutions));
+        setProblemProgress(mapProgressByProblem(nextProgress));
+        setProblemForm((prev) => ({
+          ...prev,
+          clientId: prev.clientId || fetchedClients?.[0]?.id || "",
+        }));
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+        setDataError(error.message || "Failed to load data.");
+      } finally {
+        if (isMounted) {
+          setIsDataLoading(false);
+        }
+      }
+    };
+
+    loadData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [runtimeUserId]);
 
   const visibleProblems = useMemo(() => {
     const query = searchText.trim().toLowerCase();
@@ -283,6 +506,39 @@ export function App() {
   }, [searchText, problems, clientsById]);
 
   const currentCode = codeByLanguage[language];
+  const liveSolutionSelectionKey = selectedProblem ? `live:${selectedProblem.id}` : "";
+  const solutionModalProblem = useMemo(() => {
+    if (!solutionModalProblemId) {
+      return null;
+    }
+    return problems.find((problem) => problem.id === solutionModalProblemId) || null;
+  }, [problems, solutionModalProblemId]);
+  const solutionModalContextKey = solutionModalProblem
+    ? getSolutionContextKey(solutionModalProblem.id, solutionModalLanguage)
+    : "";
+  const liveSolutionsForProblem = useMemo(() => {
+    if (!selectedProblem) {
+      return [];
+    }
+
+    const prefix = `${selectedProblem.id}:`;
+    return Object.entries(problemSolutions).flatMap(([key, entries]) => {
+      if (!key.startsWith(prefix) || !Array.isArray(entries)) {
+        return [];
+      }
+
+      const contextLanguage = key.slice(prefix.length);
+      return entries.map((entry) => ({
+        ...entry,
+        contextLanguage: contextLanguage || entry.language || "js",
+      }));
+    });
+  }, [selectedProblem, problemSolutions]);
+  const solutionsForModalContext = solutionModalContextKey ? problemSolutions[solutionModalContextKey] || [] : [];
+  const selectedSolutionId = selectedSolutionByContext[liveSolutionSelectionKey] || "";
+  const selectedModalSolutionId = selectedSolutionByContext[solutionModalContextKey] || "";
+  const activeSolution = liveSolutionsForProblem.find((entry) => entry.id === selectedSolutionId) || null;
+  const activeModalSolution = solutionsForModalContext.find((entry) => entry.id === selectedModalSolutionId) || null;
 
   const executeCode = async () => {
     if (!selectedProblem) {
@@ -315,13 +571,172 @@ export function App() {
     setCodeByLanguage(restoredCode);
     setLanguage(saved?.language || "js");
     setOutput(saved?.output || ["Program ready. Click Run or start typing."]);
+    setIsSolutionsDrawerOpen(true);
+    setSolutionsDrawerSide("left");
+    setSolutionsDrawerWidth(40);
     setSelectedProblem(problem);
+  };
+
+  const appendSolutionToContext = async (contextKey, targetLanguage, formValue, existingCount) => {
+    if (!contextKey) {
+      return null;
+    }
+
+    const [problemId] = contextKey.split(":");
+    if (!problemId) {
+      return null;
+    }
+
+    const title = formValue.title.trim() || `Solution ${existingCount + 1}`;
+    const tag = formValue.tag.trim() || "General";
+    const content = formValue.content.trim();
+
+    if (!content) {
+      return null;
+    }
+
+    const created = await apiRequest("/api/solutions", {
+      method: "POST",
+      body: JSON.stringify({
+        problemId,
+        language: targetLanguage,
+        title,
+        tag,
+        content,
+      }),
+    });
+
+    const item = {
+      id: created.id,
+      problemId: created.problemId,
+      title: created.title,
+      tag: created.tag,
+      language: created.language,
+      content: created.content,
+      createdAt: created.createdAt,
+      updatedAt: created.updatedAt,
+    };
+
+    setProblemSolutions((prev) => ({
+      ...prev,
+      [contextKey]: [item, ...(prev[contextKey] || [])],
+    }));
+
+    setSelectedSolutionByContext((prev) => ({
+      ...prev,
+      [contextKey]: item.id,
+    }));
+
+    return item;
+  };
+
+  const handleAddSolutionFromModal = async (event) => {
+    event.preventDefault();
+    try {
+      if (editingModalSolutionId) {
+        const title = solutionModalForm.title.trim();
+        const tag = solutionModalForm.tag.trim() || "General";
+        const content = solutionModalForm.content.trim();
+
+        if (!title || !content || !solutionModalContextKey) {
+          return;
+        }
+
+        const updated = await apiRequest(`/api/solutions/${editingModalSolutionId}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            language: solutionModalLanguage,
+            title,
+            tag,
+            content,
+          }),
+        });
+
+        setProblemSolutions((prev) => ({
+          ...prev,
+          [solutionModalContextKey]: (prev[solutionModalContextKey] || []).map((entry) =>
+            entry.id === editingModalSolutionId
+              ? {
+                  ...entry,
+                  title: updated.title,
+                  tag: updated.tag,
+                  content: updated.content,
+                  language: updated.language,
+                  updatedAt: updated.updatedAt,
+                }
+              : entry
+          ),
+        }));
+
+        setSelectedSolutionByContext((prev) => ({
+          ...prev,
+          [solutionModalContextKey]: editingModalSolutionId,
+        }));
+        setEditingModalSolutionId(null);
+        setSolutionModalForm(makeSolutionForm());
+        return;
+      }
+
+      await appendSolutionToContext(
+        solutionModalContextKey,
+        solutionModalLanguage,
+        solutionModalForm,
+        solutionsForModalContext.length
+      );
+      setSolutionModalForm(makeSolutionForm());
+    } catch (error) {
+      window.alert(error.message || "Failed to save solution.");
+    }
+  };
+
+  const handleEditSolutionFromModal = () => {
+    if (!activeModalSolution) {
+      return;
+    }
+
+    setEditingModalSolutionId(activeModalSolution.id);
+    setSolutionModalForm({
+      title: activeModalSolution.title || "",
+      tag: activeModalSolution.tag || "",
+      content: activeModalSolution.content || "",
+    });
+  };
+
+  const handleCancelSolutionEdit = () => {
+    setEditingModalSolutionId(null);
+    setSolutionModalForm(makeSolutionForm());
+  };
+
+  const handleSelectSolution = (solutionId, contextKey = liveSolutionSelectionKey) => {
+    if (!contextKey) {
+      return;
+    }
+    setSelectedSolutionByContext((prev) => ({
+      ...prev,
+      [contextKey]: solutionId,
+    }));
   };
 
   const closeProblemModal = () => {
     setIsProblemModalOpen(false);
     setEditingProblemId(null);
     setProblemForm(makeProblemForm(clients[0]?.id || ""));
+  };
+
+  const closeSolutionModal = () => {
+    setIsSolutionModalOpen(false);
+    setSolutionModalProblemId(null);
+    setSolutionModalLanguage("js");
+    setEditingModalSolutionId(null);
+    setSolutionModalForm(makeSolutionForm());
+  };
+
+  const openSolutionModal = (problem) => {
+    setSolutionModalProblemId(problem.id);
+    setSolutionModalLanguage("js");
+    setEditingModalSolutionId(null);
+    setSolutionModalForm(makeSolutionForm());
+    setIsSolutionModalOpen(true);
   };
 
   const openAddProblemModal = () => {
@@ -348,9 +763,8 @@ export function App() {
     setIsProblemModalOpen(true);
   };
 
-  const handleUpsertProblem = (event) => {
+  const handleUpsertProblem = async (event) => {
     event.preventDefault();
-    const now = new Date().toISOString();
     const title = problemForm.title.trim();
     const statement = problemForm.statement.trim();
 
@@ -362,46 +776,45 @@ export function App() {
       return;
     }
 
-    if (modalMode === "edit" && editingProblemId) {
-      setProblems((prev) =>
-        prev.map((problem) => {
-          if (problem.id !== editingProblemId) {
-            return problem;
-          }
-
-          return {
-            ...problem,
+    try {
+      if (modalMode === "edit" && editingProblemId) {
+        const updated = await apiRequest(`/api/problems/${editingProblemId}`, {
+          method: "PUT",
+          body: JSON.stringify({
             title,
             statement,
             difficulty: problemForm.difficulty,
             clientId: problemForm.clientId,
             status: problemForm.status,
-            updatedAt: now,
-          };
-        })
-      );
+          }),
+        });
+
+        setProblems((prev) =>
+          prev.map((problem) => (problem.id === editingProblemId ? updated : problem))
+        );
+        closeProblemModal();
+        return;
+      }
+
+      const created = await apiRequest("/api/problems", {
+        method: "POST",
+        body: JSON.stringify({
+          title,
+          statement,
+          difficulty: problemForm.difficulty,
+          clientId: problemForm.clientId,
+          status: problemForm.status,
+        }),
+      });
+
+      setProblems((prev) => [created, ...prev]);
       closeProblemModal();
-      return;
+    } catch (error) {
+      window.alert(error.message || "Failed to save problem.");
     }
-
-    setProblems((prev) => [
-      {
-        id: `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now()}`,
-        title,
-        statement,
-        difficulty: problemForm.difficulty,
-        clientId: problemForm.clientId,
-        status: problemForm.status,
-        createdAt: now,
-        updatedAt: now,
-      },
-      ...prev,
-    ]);
-
-    closeProblemModal();
   };
 
-  const handleDeleteProblem = (problemId) => {
+  const handleDeleteProblem = async (problemId) => {
     const target = problems.find((problem) => problem.id === problemId);
     if (!target) {
       return;
@@ -409,6 +822,15 @@ export function App() {
 
     const shouldDelete = window.confirm(`Delete problem \"${target.title}\"?`);
     if (!shouldDelete) {
+      return;
+    }
+
+    try {
+      await apiRequest(`/api/problems/${problemId}`, {
+        method: "DELETE",
+      });
+    } catch (error) {
+      window.alert(error.message || "Failed to delete problem.");
       return;
     }
 
@@ -423,24 +845,20 @@ export function App() {
     });
   };
 
-  const handleStatusChange = (problemId, nextStatus) => {
-    const now = new Date().toISOString();
-    setProblems((prev) =>
-      prev.map((problem) => {
-        if (problem.id !== problemId) {
-          return problem;
-        }
+  const handleStatusChange = async (problemId, nextStatus) => {
+    try {
+      const updated = await apiRequest(`/api/problems/${problemId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: nextStatus }),
+      });
 
-        return {
-          ...problem,
-          status: nextStatus,
-          updatedAt: now,
-        };
-      })
-    );
+      setProblems((prev) => prev.map((problem) => (problem.id === problemId ? updated : problem)));
+    } catch (error) {
+      window.alert(error.message || "Failed to update problem status.");
+    }
   };
 
-  const handleAddClient = (event) => {
+  const handleAddClient = async (event) => {
     event.preventDefault();
     const name = clientForm.name.trim();
     const abbreviation = clientForm.abbreviation.trim().toUpperCase();
@@ -458,19 +876,23 @@ export function App() {
       return;
     }
 
-    setClients((prev) => [
-      ...prev,
-      {
-        id: `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now()}`,
-        name,
-        abbreviation,
-      },
-    ]);
+    try {
+      const created = await apiRequest("/api/clients", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          abbreviation,
+        }),
+      });
 
-    setClientForm(makeClientForm());
+      setClients((prev) => [...prev, created]);
+      setClientForm(makeClientForm());
+    } catch (error) {
+      window.alert(error.message || "Failed to add client.");
+    }
   };
 
-  const handleDeleteClient = (clientId) => {
+  const handleDeleteClient = async (clientId) => {
     if (clientUsage[clientId]) {
       return;
     }
@@ -484,6 +906,15 @@ export function App() {
       `Delete client \"${client.name}\" (${client.abbreviation})?`
     );
     if (!shouldDelete) {
+      return;
+    }
+
+    try {
+      await apiRequest(`/api/clients/${clientId}`, {
+        method: "DELETE",
+      });
+    } catch (error) {
+      window.alert(error.message || "Failed to delete client.");
       return;
     }
 
@@ -557,23 +988,148 @@ export function App() {
   }, [selectedProblem, codeByLanguage, language, output]);
 
   useEffect(() => {
-    localStorage.setItem(USER_PROGRESS_STORAGE_KEY, JSON.stringify(problemProgress));
-  }, [problemProgress]);
+    localStorage.setItem(SOLUTION_SELECTION_STORAGE_KEY, JSON.stringify(selectedSolutionByContext));
+  }, [selectedSolutionByContext]);
 
   useEffect(() => {
-    if (!isProblemModalOpen) {
+    if (!selectedProblem || !runtimeUserId) {
       return;
+    }
+
+    clearTimeout(progressPersistTimerRef.current);
+    progressPersistTimerRef.current = setTimeout(async () => {
+      try {
+        await apiRequest(`/api/progress/${selectedProblem.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            userId: runtimeUserId,
+            codeByLanguage,
+            language,
+            output,
+            updatedAt: new Date().toISOString(),
+          }),
+        });
+      } catch (error) {
+        console.error("Failed to persist progress:", error);
+      }
+    }, 700);
+
+    return () => clearTimeout(progressPersistTimerRef.current);
+  }, [selectedProblem, runtimeUserId, codeByLanguage, language, output]);
+
+  useEffect(() => {
+    if (!liveSolutionSelectionKey) {
+      return;
+    }
+    if (!selectedSolutionId) {
+      return;
+    }
+    const exists = liveSolutionsForProblem.some((entry) => entry.id === selectedSolutionId);
+    if (!exists) {
+      setSelectedSolutionByContext((prev) => ({
+        ...prev,
+        [liveSolutionSelectionKey]: "",
+      }));
+    }
+  }, [liveSolutionSelectionKey, liveSolutionsForProblem, selectedSolutionId]);
+
+  useEffect(() => {
+    if (!solutionModalContextKey || !selectedModalSolutionId) {
+      return;
+    }
+    const exists = solutionsForModalContext.some((entry) => entry.id === selectedModalSolutionId);
+    if (!exists) {
+      setSelectedSolutionByContext((prev) => ({
+        ...prev,
+        [solutionModalContextKey]: "",
+      }));
+    }
+  }, [solutionModalContextKey, solutionsForModalContext, selectedModalSolutionId]);
+
+  useEffect(() => {
+    if (!isSolutionModalOpen) {
+      return;
+    }
+    setEditingModalSolutionId(null);
+    setSolutionModalForm(makeSolutionForm());
+  }, [solutionModalLanguage, isSolutionModalOpen]);
+
+  useEffect(() => {
+    const onResize = () => {
+      setIsMobileViewport(window.innerWidth <= 1024);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    if (!isProblemModalOpen && !isSolutionModalOpen) {
+      if (!isSolutionsDrawerOpen || !isMobileViewport) {
+        return;
+      }
     }
 
     const onKeyDown = (event) => {
       if (event.key === "Escape") {
-        closeProblemModal();
+        if (isProblemModalOpen) {
+          closeProblemModal();
+        }
+        if (isSolutionModalOpen) {
+          closeSolutionModal();
+        }
+        if (isSolutionsDrawerOpen && isMobileViewport) {
+          setIsSolutionsDrawerOpen(false);
+        }
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isProblemModalOpen]);
+  }, [isProblemModalOpen, isSolutionModalOpen, isSolutionsDrawerOpen, isMobileViewport]);
+
+  const solutionsPanelContent = (
+    <>
+      <h3 className="solutions-panel__title">Solutions (All Languages)</h3>
+      <select
+        className="solutions-select"
+        value={selectedSolutionId}
+        onChange={(event) => handleSelectSolution(event.target.value, liveSolutionSelectionKey)}
+      >
+        <option value="">Select solution</option>
+        {liveSolutionsForProblem.map((entry) => (
+          <option key={entry.id} value={entry.id}>
+            {entry.title} - {LANGUAGE_LABEL_BY_ID[entry.contextLanguage] || entry.contextLanguage}
+          </option>
+        ))}
+      </select>
+      {selectedSolutionId && activeSolution ? (
+        <div className="solution-preview solution-preview--live">
+          <div className="solution-meta">
+            <strong>{activeSolution.title}</strong>
+            <span>{activeSolution.tag}</span>
+          </div>
+          <div className="solution-readonly-editor">
+            <Editor
+              height="100%"
+              language={MONACO_LANGUAGE_BY_ID[activeSolution.contextLanguage || activeSolution.language || "js"]}
+              theme={theme === "dark" ? "vs-dark" : "vs-light"}
+              value={activeSolution.content || ""}
+              options={{
+                readOnly: true,
+                minimap: { enabled: false },
+                fontSize: 13,
+                lineNumbers: "on",
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+              }}
+            />
+          </div>
+        </div>
+      ) : (
+        <p className="hint-text">Select a solution from the dropdown to view details.</p>
+      )}
+    </>
+  );
 
   return (
     <div className="platform">
@@ -605,6 +1161,9 @@ export function App() {
         <p>Search problems, manage client references, and launch coding workspace instantly.</p>
       </header>
 
+      {isDataLoading && <p className="hint-text">Loading dashboard data from MongoDB...</p>}
+      {dataError && <p className="hint-text">{dataError}</p>}
+
       {selectedProblem ? (
         <section className="workspace">
           <div className="workspace__topbar">
@@ -622,6 +1181,31 @@ export function App() {
             <button className="primary-btn" onClick={executeCode}>
               Run
             </button>
+            <button className="ghost-btn" onClick={() => setIsSolutionsDrawerOpen((prev) => !prev)}>
+              {isSolutionsDrawerOpen ? "Hide Solutions" : "Solutions"}
+            </button>
+            {isSolutionsDrawerOpen && (
+              <button
+                className="ghost-btn"
+                onClick={() => setSolutionsDrawerSide((prev) => (prev === "right" ? "left" : "right"))}
+              >
+                {solutionsDrawerSide === "right" ? "Dock Left" : "Dock Right"}
+              </button>
+            )}
+            {isSolutionsDrawerOpen && (
+              <label className="drawer-width-control">
+                Drawer Width
+                <input
+                  type="range"
+                  min="30"
+                  max="70"
+                  step="1"
+                  value={solutionsDrawerWidth}
+                  onChange={(event) => setSolutionsDrawerWidth(Number(event.target.value))}
+                />
+                <span>{solutionsDrawerWidth}%</span>
+              </label>
+            )}
             {isRunning && <span className="status status--running">Running...</span>}
           </div>
 
@@ -632,25 +1216,33 @@ export function App() {
 
             <article className="panel editor-panel">
               <h2 className="panel-title">Editor ({language})</h2>
-              <div className="editor">
-                <Editor
-                  height="320px"
-                  language={MONACO_LANGUAGE_BY_ID[language]}
-                  theme={theme === "dark" ? "vs-dark" : "vs-light"}
-                  value={currentCode}
-                  options={{
-                    minimap: { enabled: false },
-                    fontSize: 14,
-                    tabSize: 2,
-                    automaticLayout: true,
-                  }}
-                  onChange={(value) =>
-                    setCodeByLanguage((prev) => ({
-                      ...prev,
-                      [language]: value || "",
-                    }))
-                  }
-                />
+              <div
+                className={`editor-with-solutions ${
+                  isSolutionsDrawerOpen
+                    ? `editor-with-solutions--drawer-open editor-with-solutions--${solutionsDrawerSide}`
+                    : ""
+                }`}
+              >
+                <div className="editor">
+                  <Editor
+                    height="100%"
+                    language={MONACO_LANGUAGE_BY_ID[language]}
+                    theme={theme === "dark" ? "vs-dark" : "vs-light"}
+                    value={currentCode}
+                    options={{
+                      minimap: { enabled: false },
+                      fontSize: 14,
+                      tabSize: 2,
+                      automaticLayout: true,
+                    }}
+                    onChange={(value) =>
+                      setCodeByLanguage((prev) => ({
+                        ...prev,
+                        [language]: value || "",
+                      }))
+                    }
+                  />
+                </div>
               </div>
             </article>
 
@@ -659,6 +1251,27 @@ export function App() {
               <pre className="console">{output.join("\n")}</pre>
             </article>
           </div>
+          {isSolutionsDrawerOpen && !isMobileViewport && (
+            <aside
+              className={`solutions-panel solutions-panel--drawer solutions-panel--${solutionsDrawerSide}`}
+              style={{ "--solutions-drawer-width": `${solutionsDrawerWidth}%` }}
+            >
+              {solutionsPanelContent}
+            </aside>
+          )}
+          {isSolutionsDrawerOpen && isMobileViewport && (
+            <div className="modal-backdrop modal-backdrop--fullscreen" onClick={() => setIsSolutionsDrawerOpen(false)}>
+              <div className="modal modal--mobile-solutions" onClick={(event) => event.stopPropagation()}>
+                <div className="modal__header">
+                  <h2>Solutions</h2>
+                  <button className="ghost-btn" type="button" onClick={() => setIsSolutionsDrawerOpen(false)}>
+                    Close
+                  </button>
+                </div>
+                <div className="solutions-panel solutions-panel--modal">{solutionsPanelContent}</div>
+              </div>
+            </div>
+          )}
         </section>
       ) : activePage === "clients" ? (
         <section className="panel dashboard-panel">
@@ -706,40 +1319,42 @@ export function App() {
 
             <article className="panel clients-table-card">
               <h2 className="panel-title">Client Directory</h2>
-              <table className="problem-table">
-                <thead>
-                  <tr>
-                    <th>Abbreviation</th>
-                    <th>Client Name</th>
-                    <th>Used In Problems</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {clients.map((client) => {
-                    const usage = clientUsage[client.id] || 0;
-                    const isLocked = usage > 0;
-                    return (
-                      <tr key={client.id}>
-                        <td>
-                          <span className="client-chip">{client.abbreviation}</span>
-                        </td>
-                        <td>{client.name}</td>
-                        <td>{usage}</td>
-                        <td>
-                          {isLocked ? (
-                            <span className="locked-chip">Locked: Remove references first</span>
-                          ) : (
-                            <button className="danger-btn" onClick={() => handleDeleteClient(client.id)}>
-                              Delete
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <div className="table-scroll">
+                <table className="problem-table">
+                  <thead>
+                    <tr>
+                      <th>Abbreviation</th>
+                      <th>Client Name</th>
+                      <th>Used In Problems</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clients.map((client) => {
+                      const usage = clientUsage[client.id] || 0;
+                      const isLocked = usage > 0;
+                      return (
+                        <tr key={client.id}>
+                          <td>
+                            <span className="client-chip">{client.abbreviation}</span>
+                          </td>
+                          <td>{client.name}</td>
+                          <td>{usage}</td>
+                          <td>
+                            {isLocked ? (
+                              <span className="locked-chip">Locked: Remove references first</span>
+                            ) : (
+                              <button className="danger-btn" onClick={() => handleDeleteClient(client.id)}>
+                                Delete
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </article>
           </div>
         </section>
@@ -761,88 +1376,111 @@ export function App() {
             <p className="hint-text">Add at least one client in the Clients page before creating problems.</p>
           )}
 
-          <table className="problem-table">
-            <thead>
-              <tr>
-                <th>Problem</th>
-                <th>Difficulty</th>
-                <th>Client</th>
-                <th>Date Added</th>
-                <th>Last Modified</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleProblems.map((problem) => {
-                const client = clientsById[problem.clientId];
-                return (
-                  <tr key={problem.id} className="problem-row">
-                    <td>
-                      <div className="problem-title">{problem.title}</div>
-                      <div className="problem-statement">{problem.statement}</div>
-                    </td>
-                    <td>
-                      <span className={`difficulty-badge difficulty-badge--${problem.difficulty.toLowerCase()}`}>
-                        {problem.difficulty}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="client-cell">
-                        <span className="client-chip">{client?.abbreviation || "N/A"}</span>
-                        <button
-                          className="info-icon"
-                          type="button"
-                          title={client?.name || "Client not found"}
-                          aria-label={client?.name || "Client not found"}
-                        >
-                          i
-                        </button>
-                      </div>
-                    </td>
-                    <td>{formatTimestamp(problem.createdAt)}</td>
-                    <td>{formatTimestamp(problem.updatedAt)}</td>
-                    <td>
-                      <select
-                        className="status-select"
-                        value={problem.status}
-                        onChange={(event) => handleStatusChange(problem.id, event.target.value)}
-                      >
-                        {STATUS_OPTIONS.map((status) => (
-                          <option key={status} value={status}>
-                            {status}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <div className="table-actions">
-                        <button
-                          className="primary-btn"
-                          onClick={() => openProblemWorkspace(problem)}
-                          disabled={problem.status !== "Active"}
-                          title={problem.status !== "Active" ? "Only active problems can be opened" : "Open"}
-                        >
-                          Open
-                        </button>
-                        <button className="ghost-btn" onClick={() => openEditProblemModal(problem)}>
-                          Edit
-                        </button>
-                        <button className="danger-btn" onClick={() => handleDeleteProblem(problem.id)}>
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-              {!visibleProblems.length && (
+          <div className="table-scroll">
+            <table className="problem-table">
+              <thead>
                 <tr>
-                  <td colSpan="7">No problems found for the current search.</td>
+                  <th>Problem</th>
+                  <th>Difficulty</th>
+                  <th>Client</th>
+                  <th>Date Added</th>
+                  <th>Last Modified</th>
+                  <th>Status</th>
+                  <th>Actions</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {visibleProblems.map((problem) => {
+                  const client = clientsById[problem.clientId];
+                  return (
+                    <tr key={problem.id} className="problem-row">
+                      <td>
+                        <div className="problem-title">{problem.title}</div>
+                        <div className="problem-statement">{problem.statement}</div>
+                      </td>
+                      <td>
+                        <span className={`difficulty-badge difficulty-badge--${problem.difficulty.toLowerCase()}`}>
+                          {problem.difficulty}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="client-cell">
+                          <span className="client-chip">{client?.abbreviation || "N/A"}</span>
+                          <div className="client-info">
+                            <button
+                              className="info-icon"
+                              type="button"
+                              aria-label={client?.name || "Client not found"}
+                            >
+                              i
+                            </button>
+                            <span className="client-tooltip">{client?.name || "Client not found"}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td>{formatTimestamp(problem.createdAt)}</td>
+                      <td>{formatTimestamp(problem.updatedAt)}</td>
+                      <td>
+                        <select
+                          className="status-select"
+                          value={problem.status}
+                          onChange={(event) => handleStatusChange(problem.id, event.target.value)}
+                        >
+                          {STATUS_OPTIONS.map((status) => (
+                            <option key={status} value={status}>
+                              {status}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        <div className="table-actions">
+                          <button
+                            className="primary-btn action-icon-btn"
+                            onClick={() => openProblemWorkspace(problem)}
+                            disabled={problem.status !== "Active"}
+                            title={problem.status !== "Active" ? "Open: only active problems can be opened" : "Open Problem"}
+                            aria-label={problem.status !== "Active" ? "Open problem disabled" : "Open problem"}
+                          >
+                            <span aria-hidden="true">▶</span>
+                          </button>
+                          <button
+                            className="ghost-btn action-icon-btn"
+                            onClick={() => openEditProblemModal(problem)}
+                            title="Edit Problem"
+                            aria-label="Edit problem"
+                          >
+                            <span aria-hidden="true">✎</span>
+                          </button>
+                          <button
+                            className="ghost-btn action-icon-btn"
+                            onClick={() => openSolutionModal(problem)}
+                            title="Manage Solutions"
+                            aria-label="Manage solutions"
+                          >
+                            <span aria-hidden="true">☰</span>
+                          </button>
+                          <button
+                            className="danger-btn action-icon-btn"
+                            onClick={() => handleDeleteProblem(problem.id)}
+                            title="Delete Problem"
+                            aria-label="Delete problem"
+                          >
+                            <span aria-hidden="true">✕</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!visibleProblems.length && (
+                  <tr>
+                    <td colSpan="7">No problems found for the current search.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
 
           {isProblemModalOpen && (
             <div className="modal-backdrop" onClick={closeProblemModal}>
@@ -950,6 +1588,121 @@ export function App() {
                     </button>
                   </div>
                 </form>
+              </div>
+            </div>
+          )}
+          {isSolutionModalOpen && solutionModalProblem && (
+            <div className="modal-backdrop modal-backdrop--fullscreen" onClick={closeSolutionModal}>
+              <div className="modal modal--fullscreen" onClick={(event) => event.stopPropagation()}>
+                <div className="modal__header">
+                  <h2>Add Solutions - {solutionModalProblem.title}</h2>
+                  <button className="ghost-btn" type="button" onClick={closeSolutionModal}>
+                    Close
+                  </button>
+                </div>
+                <div className="solutions-modal-layout">
+                  <form className="solutions-form" onSubmit={handleAddSolutionFromModal}>
+                    <label>
+                      Language
+                      <select
+                        className="solutions-select"
+                        value={solutionModalLanguage}
+                        onChange={(event) => setSolutionModalLanguage(event.target.value)}
+                      >
+                        {LANGUAGES.map((entry) => (
+                          <option key={entry.id} value={entry.id}>
+                            {entry.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Solution title"
+                      value={solutionModalForm.title}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setSolutionModalForm((prev) => ({ ...prev, title: value }));
+                      }}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Tag (e.g. DP)"
+                      value={solutionModalForm.tag}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setSolutionModalForm((prev) => ({ ...prev, tag: value }));
+                      }}
+                    />
+                    <textarea
+                      hidden
+                      value={solutionModalForm.content}
+                      readOnly
+                    />
+                    <div className="solutions-editor">
+                      <Editor
+                        height="360px"
+                        language={MONACO_LANGUAGE_BY_ID[solutionModalLanguage]}
+                        theme={theme === "dark" ? "vs-dark" : "vs-light"}
+                        value={solutionModalForm.content}
+                        options={{
+                          minimap: { enabled: false },
+                          fontSize: 14,
+                          tabSize: 2,
+                          automaticLayout: true,
+                        }}
+                        onChange={(value) => {
+                          setSolutionModalForm((prev) => ({ ...prev, content: value || "" }));
+                        }}
+                      />
+                    </div>
+                    <button className="primary-btn" type="submit">
+                      {editingModalSolutionId ? "Save Changes" : "Save Solution"}
+                    </button>
+                    {editingModalSolutionId && (
+                      <button className="ghost-btn" type="button" onClick={handleCancelSolutionEdit}>
+                        Cancel Edit
+                      </button>
+                    )}
+                  </form>
+                  <div className="solutions-modal-preview">
+                    <h3 className="solutions-panel__title">Saved ({solutionModalLanguage})</h3>
+                    <select
+                      className="solutions-select"
+                      value={selectedModalSolutionId}
+                      onChange={(event) => handleSelectSolution(event.target.value, solutionModalContextKey)}
+                    >
+                      <option value="">Select solution</option>
+                      {solutionsForModalContext.map((entry) => (
+                        <option key={entry.id} value={entry.id}>
+                          {entry.title} [{entry.tag}]
+                        </option>
+                      ))}
+                    </select>
+                    {selectedModalSolutionId && activeModalSolution ? (
+                      <div className="table-actions">
+                        <button className="ghost-btn" type="button" onClick={handleEditSolutionFromModal}>
+                          Edit Selected
+                        </button>
+                      </div>
+                    ) : null}
+                    {selectedModalSolutionId && activeModalSolution ? (
+                      <div className="solution-preview">
+                        <div className="solution-meta">
+                          <strong>{activeModalSolution.title}</strong>
+                          <span>{activeModalSolution.tag}</span>
+                        </div>
+                        <pre>{activeModalSolution.content}</pre>
+                      </div>
+                    ) : (
+                      <p className="hint-text">
+                        {solutionsForModalContext.length
+                          ? "Select a saved solution to preview or edit."
+                          : "No saved solutions for this language yet."}
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           )}

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import * as ts from "typescript";
 
@@ -9,6 +9,7 @@ const LANGUAGES = [
 ];
 
 const STATUS_OPTIONS = ["Active", "Disabled", "Redundant"];
+const DASHBOARD_PAGE_SIZE_OPTIONS = [10, 20, 50, 100, "all"];
 
 const MONACO_LANGUAGE_BY_ID = {
   js: "javascript",
@@ -46,6 +47,109 @@ const formatTimestamp = (value) => {
   }
 
   return DATE_TIME_FORMAT.format(date);
+};
+
+const normalizeStatementHeading = (value) => {
+  return String(value || "")
+    .replace(/^#+\s*/, "")
+    .replace(/^\d+\s*[\)\].:-]\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+};
+
+const getLiveProblemStatement = (problem) => {
+  const raw = String(problem?.statement || "");
+  if (!raw) {
+    return "";
+  }
+
+  const lines = raw.split("\n");
+  const titleNormalized = normalizeStatementHeading(problem?.title);
+  const codeNameNormalized = normalizeStatementHeading(problem?.problemCodeName);
+  let lineIndex = 0;
+  let removed = 0;
+
+  while (lineIndex < lines.length && removed < 2) {
+    const current = String(lines[lineIndex] || "");
+    const currentTrimmed = current.trim();
+
+    if (!currentTrimmed) {
+      lineIndex += 1;
+      continue;
+    }
+
+    const normalized = normalizeStatementHeading(currentTrimmed);
+    const includesTitle = titleNormalized && normalized.includes(titleNormalized);
+    const includesCodeName = codeNameNormalized && normalized.includes(codeNameNormalized);
+    const isOnlyTitle = titleNormalized && normalized === titleNormalized;
+    const isOnlyCodeName = codeNameNormalized && normalized === codeNameNormalized;
+
+    if (isOnlyTitle || isOnlyCodeName || (includesTitle && includesCodeName)) {
+      lineIndex += 1;
+      removed += 1;
+      continue;
+    }
+
+    break;
+  }
+
+  return lines.slice(lineIndex).join("\n").trimStart();
+};
+
+const DASHBOARD_ROUTE_HASH = "#/dashboard";
+const CLIENTS_ROUTE_HASH = "#/clients";
+const LIVE_ROUTE_PREFIX = "#/live/";
+
+const normalizeProblemRouteCode = (value) => String(value || "").trim().toLowerCase();
+
+const getProblemRouteCode = (problem) => {
+  return String(problem?.problemCodeName || problem?.id || "").trim();
+};
+
+const getLiveRouteHash = (problem) => {
+  const code = getProblemRouteCode(problem);
+  return code ? `${LIVE_ROUTE_PREFIX}${encodeURIComponent(code)}` : DASHBOARD_ROUTE_HASH;
+};
+
+const parseRouteFromHash = (hashValue) => {
+  const hash = String(hashValue || "").trim();
+
+  if (!hash || hash === "#" || hash === "#/") {
+    return { page: "dashboard" };
+  }
+
+  if (hash === CLIENTS_ROUTE_HASH) {
+    return { page: "clients" };
+  }
+
+  if (hash.startsWith(LIVE_ROUTE_PREFIX)) {
+    const rawCode = hash.slice(LIVE_ROUTE_PREFIX.length);
+    try {
+      return { page: "live", code: decodeURIComponent(rawCode).trim() };
+    } catch (_error) {
+      return { page: "live", code: rawCode.trim() };
+    }
+  }
+
+  return { page: "dashboard" };
+};
+
+const setRouteHash = (nextHash, replace = false) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (window.location.hash === nextHash) {
+    return;
+  }
+
+  if (replace) {
+    window.history.replaceState(null, "", nextHash);
+    return;
+  }
+
+  window.location.hash = nextHash;
 };
 
 const SOLUTION_SELECTION_STORAGE_KEY = "single_user_solution_selection_v1";
@@ -344,11 +448,19 @@ async function runPython(code) {
 export function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "light");
   const [activePage, setActivePage] = useState("dashboard");
+  const [currentRoute, setCurrentRoute] = useState(() =>
+    typeof window === "undefined" ? { page: "dashboard" } : parseRouteFromHash(window.location.hash)
+  );
   const [clients, setClients] = useState([]);
   const [problems, setProblems] = useState([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [dataError, setDataError] = useState("");
   const [searchText, setSearchText] = useState("");
+  const [sortConfig, setSortConfig] = useState({ key: "updatedAt", direction: "desc" });
+  const [dashboardPageSize, setDashboardPageSize] = useState(20);
+  const [dashboardPage, setDashboardPage] = useState(1);
+  const [expandedStatementsByProblem, setExpandedStatementsByProblem] = useState({});
   const [selectedProblem, setSelectedProblem] = useState(null);
   const [isProblemModalOpen, setIsProblemModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState("add");
@@ -399,10 +511,9 @@ export function App() {
     }, {});
   }, [problems]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadData = async () => {
+  const fetchDataFromDb = useCallback(
+    async (options = {}) => {
+      const { isMountedCheck = () => true } = options;
       try {
         setIsDataLoading(true);
         setDataError("");
@@ -414,7 +525,7 @@ export function App() {
           apiRequest(`/api/progress?userId=${encodeURIComponent(runtimeUserId)}`),
         ]);
 
-        if (!isMounted) {
+        if (!isMountedCheck()) {
           return;
         }
 
@@ -458,6 +569,10 @@ export function App() {
           }
         }
 
+        if (!isMountedCheck()) {
+          return;
+        }
+
         setClients(fetchedClients || []);
         setProblems(fetchedProblems || []);
         setProblemSolutions(mapSolutionsByContext(nextSolutions));
@@ -467,23 +582,32 @@ export function App() {
           clientId: prev.clientId || fetchedClients?.[0]?.id || "",
         }));
       } catch (error) {
-        if (!isMounted) {
+        if (!isMountedCheck()) {
           return;
         }
         setDataError(error.message || "Failed to load data.");
       } finally {
-        if (isMounted) {
+        if (isMountedCheck()) {
           setIsDataLoading(false);
         }
       }
-    };
+    },
+    [runtimeUserId]
+  );
 
-    loadData();
+  const handleRefreshData = useCallback(async () => {
+    setIsRefreshing(true);
+    await fetchDataFromDb();
+    setIsRefreshing(false);
+  }, [fetchDataFromDb]);
 
+  useEffect(() => {
+    let isMounted = true;
+    fetchDataFromDb({ isMountedCheck: () => isMounted });
     return () => {
       isMounted = false;
     };
-  }, [runtimeUserId]);
+  }, [fetchDataFromDb]);
 
   const visibleProblems = useMemo(() => {
     const query = searchText.trim().toLowerCase();
@@ -504,6 +628,101 @@ export function App() {
       );
     });
   }, [searchText, problems, clientsById]);
+
+  const sortedVisibleProblems = useMemo(() => {
+    const items = [...visibleProblems];
+    const { key, direction } = sortConfig;
+    const multiplier = direction === "asc" ? 1 : -1;
+
+    const difficultyRank = {
+      Easy: 1,
+      Medium: 2,
+      Hard: 3,
+    };
+
+    items.sort((a, b) => {
+      let left = a[key];
+      let right = b[key];
+
+      if (key === "clientName") {
+        left = clientsById[a.clientId]?.name || "";
+        right = clientsById[b.clientId]?.name || "";
+      }
+
+      if (key === "difficulty") {
+        left = difficultyRank[a.difficulty] || 0;
+        right = difficultyRank[b.difficulty] || 0;
+      }
+
+      if (key === "createdAt" || key === "updatedAt") {
+        left = new Date(a[key] || 0).getTime();
+        right = new Date(b[key] || 0).getTime();
+      }
+
+      if (typeof left === "number" && typeof right === "number") {
+        return (left - right) * multiplier;
+      }
+
+      return String(left || "").localeCompare(String(right || ""), undefined, { sensitivity: "base" }) * multiplier;
+    });
+
+    return items;
+  }, [visibleProblems, sortConfig, clientsById]);
+  const effectiveDashboardPageSize = dashboardPageSize === "all" ? Math.max(sortedVisibleProblems.length, 1) : dashboardPageSize;
+  const totalDashboardPages =
+    dashboardPageSize === "all" ? 1 : Math.max(1, Math.ceil(sortedVisibleProblems.length / effectiveDashboardPageSize));
+  const dashboardPageStartIndex = (dashboardPage - 1) * effectiveDashboardPageSize;
+  const paginatedVisibleProblems =
+    dashboardPageSize === "all"
+      ? sortedVisibleProblems
+      : sortedVisibleProblems.slice(dashboardPageStartIndex, dashboardPageStartIndex + effectiveDashboardPageSize);
+  const totalProblemRecords = problems.length;
+  const visibleProblemRecords = sortedVisibleProblems.length;
+  const displayStartRecord = visibleProblemRecords
+    ? dashboardPageSize === "all"
+      ? 1
+      : dashboardPageStartIndex + 1
+    : 0;
+  const displayEndRecord = visibleProblemRecords
+    ? dashboardPageSize === "all"
+      ? visibleProblemRecords
+      : Math.min(dashboardPageStartIndex + effectiveDashboardPageSize, visibleProblemRecords)
+    : 0;
+
+  const toggleSort = (key) => {
+    setSortConfig((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === "asc" ? "desc" : "asc" };
+      }
+      return { key, direction: "asc" };
+    });
+  };
+
+  useEffect(() => {
+    setDashboardPage(1);
+  }, [searchText, dashboardPageSize]);
+
+  useEffect(() => {
+    setDashboardPage((prev) => Math.min(prev, totalDashboardPages));
+  }, [totalDashboardPages]);
+
+  const getSortIndicator = (key) => {
+    if (sortConfig.key !== key) {
+      return "↕";
+    }
+    return sortConfig.direction === "asc" ? "↑" : "↓";
+  };
+
+  const toggleStatementExpand = (problemId) => {
+    if (!problemId) {
+      return;
+    }
+
+    setExpandedStatementsByProblem((prev) => ({
+      ...prev,
+      [problemId]: !prev[problemId],
+    }));
+  };
 
   const currentCode = codeByLanguage[language];
   const liveSolutionSelectionKey = selectedProblem ? `live:${selectedProblem.id}` : "";
@@ -562,7 +781,8 @@ export function App() {
     }
   };
 
-  const openProblemWorkspace = (problem) => {
+  const openProblemWorkspace = useCallback((problem, options = {}) => {
+    const { syncRoute = true } = options;
     const saved = problemProgress[problem.id];
     const restoredCode = saved?.codeByLanguage
       ? { ...DEFAULT_CODE, ...saved.codeByLanguage }
@@ -571,11 +791,27 @@ export function App() {
     setCodeByLanguage(restoredCode);
     setLanguage(saved?.language || "js");
     setOutput(saved?.output || ["Program ready. Click Run or start typing."]);
-    setIsSolutionsDrawerOpen(true);
+    setIsSolutionsDrawerOpen(false);
     setSolutionsDrawerSide("left");
     setSolutionsDrawerWidth(40);
+    setActivePage("dashboard");
     setSelectedProblem(problem);
-  };
+    if (syncRoute) {
+      setRouteHash(getLiveRouteHash(problem));
+    }
+  }, [problemProgress]);
+
+  const navigateToDashboard = useCallback((replaceRoute = false) => {
+    setSelectedProblem(null);
+    setActivePage("dashboard");
+    setRouteHash(DASHBOARD_ROUTE_HASH, replaceRoute);
+  }, []);
+
+  const navigateToClients = useCallback(() => {
+    setSelectedProblem(null);
+    setActivePage("clients");
+    setRouteHash(CLIENTS_ROUTE_HASH);
+  }, []);
 
   const appendSolutionToContext = async (contextKey, targetLanguage, formValue, existingCount) => {
     if (!contextKey) {
@@ -939,6 +1175,58 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
+    const onHashChange = () => {
+      setCurrentRoute(parseRouteFromHash(window.location.hash));
+    };
+
+    window.addEventListener("hashchange", onHashChange);
+    onHashChange();
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  useEffect(() => {
+    if (currentRoute.page === "clients") {
+      if (selectedProblem) {
+        setSelectedProblem(null);
+      }
+      setActivePage("clients");
+      return;
+    }
+
+    if (currentRoute.page === "dashboard") {
+      if (selectedProblem) {
+        setSelectedProblem(null);
+      }
+      setActivePage("dashboard");
+      return;
+    }
+
+    if (currentRoute.page === "live") {
+      if (!currentRoute.code) {
+        navigateToDashboard(true);
+        return;
+      }
+
+      const target = problems.find(
+        (problem) =>
+          normalizeProblemRouteCode(getProblemRouteCode(problem)) ===
+          normalizeProblemRouteCode(currentRoute.code)
+      );
+
+      if (target) {
+        if (!selectedProblem || selectedProblem.id !== target.id) {
+          openProblemWorkspace(target, { syncRoute: false });
+        }
+        return;
+      }
+
+      if (!isDataLoading) {
+        navigateToDashboard(true);
+      }
+    }
+  }, [currentRoute, problems, isDataLoading, selectedProblem, openProblemWorkspace, navigateToDashboard]);
+
+  useEffect(() => {
     if (!selectedProblem) {
       return;
     }
@@ -1089,7 +1377,19 @@ export function App() {
 
   const solutionsPanelContent = (
     <>
-      <h3 className="solutions-panel__title">Solutions (All Languages)</h3>
+      <div className="solutions-panel__header">
+        <h3 className="solutions-panel__title">Solutions (All Languages)</h3>
+        <button
+          className="ghost-btn action-icon-btn refresh-icon-btn"
+          type="button"
+          onClick={handleRefreshData}
+          disabled={isDataLoading || isRefreshing}
+          title="Refresh solutions from DB"
+          aria-label="Refresh solutions from database"
+        >
+          <span aria-hidden="true">↻</span>
+        </button>
+      </div>
       <select
         className="solutions-select"
         value={selectedSolutionId}
@@ -1141,13 +1441,13 @@ export function App() {
               <div className="view-switch">
                 <button
                   className={`ghost-btn tab-btn ${activePage === "dashboard" ? "tab-btn--active" : ""}`}
-                  onClick={() => setActivePage("dashboard")}
+                  onClick={() => navigateToDashboard()}
                 >
                   Problems
                 </button>
                 <button
                   className={`ghost-btn tab-btn ${activePage === "clients" ? "tab-btn--active" : ""}`}
-                  onClick={() => setActivePage("clients")}
+                  onClick={navigateToClients}
                 >
                   Clients
                 </button>
@@ -1167,7 +1467,7 @@ export function App() {
       {selectedProblem ? (
         <section className="workspace">
           <div className="workspace__topbar">
-            <button className="ghost-btn" onClick={() => setSelectedProblem(null)}>
+            <button className="ghost-btn" onClick={() => navigateToDashboard()}>
               Back to dashboard
             </button>
             <label htmlFor="language">Language</label>
@@ -1206,12 +1506,22 @@ export function App() {
                 <span>{solutionsDrawerWidth}%</span>
               </label>
             )}
+            <button
+              className="ghost-btn action-icon-btn refresh-icon-btn"
+              type="button"
+              onClick={handleRefreshData}
+              disabled={isDataLoading || isRefreshing}
+              title="Refresh problem data from DB"
+              aria-label="Refresh problem data from database"
+            >
+              <span aria-hidden="true">↻</span>
+            </button>
             {isRunning && <span className="status status--running">Running...</span>}
           </div>
 
           <div className="workspace__grid">
             <article className="panel problem-panel">
-              <p>{selectedProblem.statement}</p>
+              <pre className="problem-statement-block">{getLiveProblemStatement(selectedProblem)}</pre>
             </article>
 
             <article className="panel editor-panel">
@@ -1274,7 +1584,7 @@ export function App() {
           )}
         </section>
       ) : activePage === "clients" ? (
-        <section className="panel dashboard-panel">
+        <section className="panel dashboard-panel dashboard-panel--problems">
           <div className="clients-layout">
             <article className="panel clients-form-card">
               <h2 className="panel-title">Add Client</h2>
@@ -1368,118 +1678,215 @@ export function App() {
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
             />
-            <button className="primary-btn" onClick={openAddProblemModal} disabled={!clients.length}>
-              Add Problem
-            </button>
+            <div className="toolbar__actions">
+              <span className="record-counter" aria-live="polite">
+                Showing {displayStartRecord}-{displayEndRecord} of {visibleProblemRecords} (Total {totalProblemRecords})
+              </span>
+              <button
+                className="ghost-btn action-icon-btn refresh-icon-btn"
+                type="button"
+                onClick={handleRefreshData}
+                disabled={isDataLoading || isRefreshing}
+                title="Refresh dashboard data from DB"
+                aria-label="Refresh dashboard data from database"
+              >
+                <span aria-hidden="true">↻</span>
+              </button>
+              <button className="primary-btn" onClick={openAddProblemModal} disabled={!clients.length}>
+                Add Problem
+              </button>
+            </div>
           </div>
           {!clients.length && (
             <p className="hint-text">Add at least one client in the Clients page before creating problems.</p>
           )}
 
-          <div className="table-scroll">
-            <table className="problem-table">
-              <thead>
-                <tr>
-                  <th>Problem</th>
-                  <th>Difficulty</th>
-                  <th>Client</th>
-                  <th>Date Added</th>
-                  <th>Last Modified</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleProblems.map((problem) => {
-                  const client = clientsById[problem.clientId];
-                  return (
-                    <tr key={problem.id} className="problem-row">
-                      <td>
-                        <div className="problem-title">{problem.title}</div>
-                        <div className="problem-statement">{problem.statement}</div>
-                      </td>
-                      <td>
-                        <span className={`difficulty-badge difficulty-badge--${problem.difficulty.toLowerCase()}`}>
-                          {problem.difficulty}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="client-cell">
-                          <span className="client-chip">{client?.abbreviation || "N/A"}</span>
-                          <div className="client-info">
-                            <button
-                              className="info-icon"
-                              type="button"
-                              aria-label={client?.name || "Client not found"}
-                            >
-                              i
-                            </button>
-                            <span className="client-tooltip">{client?.name || "Client not found"}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td>{formatTimestamp(problem.createdAt)}</td>
-                      <td>{formatTimestamp(problem.updatedAt)}</td>
-                      <td>
-                        <select
-                          className="status-select"
-                          value={problem.status}
-                          onChange={(event) => handleStatusChange(problem.id, event.target.value)}
-                        >
-                          {STATUS_OPTIONS.map((status) => (
-                            <option key={status} value={status}>
-                              {status}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td>
-                        <div className="table-actions">
-                          <button
-                            className="primary-btn action-icon-btn"
-                            onClick={() => openProblemWorkspace(problem)}
-                            disabled={problem.status !== "Active"}
-                            title={problem.status !== "Active" ? "Open: only active problems can be opened" : "Open Problem"}
-                            aria-label={problem.status !== "Active" ? "Open problem disabled" : "Open problem"}
-                          >
-                            <span aria-hidden="true">▶</span>
-                          </button>
-                          <button
-                            className="ghost-btn action-icon-btn"
-                            onClick={() => openEditProblemModal(problem)}
-                            title="Edit Problem"
-                            aria-label="Edit problem"
-                          >
-                            <span aria-hidden="true">✎</span>
-                          </button>
-                          <button
-                            className="ghost-btn action-icon-btn"
-                            onClick={() => openSolutionModal(problem)}
-                            title="Manage Solutions"
-                            aria-label="Manage solutions"
-                          >
-                            <span aria-hidden="true">☰</span>
-                          </button>
-                          <button
-                            className="danger-btn action-icon-btn"
-                            onClick={() => handleDeleteProblem(problem.id)}
-                            title="Delete Problem"
-                            aria-label="Delete problem"
-                          >
-                            <span aria-hidden="true">✕</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {!visibleProblems.length && (
+          <div className="dashboard-table-area">
+            <div className="table-scroll">
+              <table className="problem-table">
+                <thead>
                   <tr>
-                    <td colSpan="7">No problems found for the current search.</td>
+                    <th>Serial No.</th>
+                    <th>
+                      <button type="button" className="th-sort-btn" onClick={() => toggleSort("title")}>
+                        Problem {getSortIndicator("title")}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className="th-sort-btn" onClick={() => toggleSort("difficulty")}>
+                        Difficulty {getSortIndicator("difficulty")}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className="th-sort-btn" onClick={() => toggleSort("clientName")}>
+                        Client {getSortIndicator("clientName")}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className="th-sort-btn" onClick={() => toggleSort("createdAt")}>
+                        Date Added {getSortIndicator("createdAt")}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className="th-sort-btn" onClick={() => toggleSort("updatedAt")}>
+                        Last Modified {getSortIndicator("updatedAt")}
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className="th-sort-btn" onClick={() => toggleSort("status")}>
+                        Status {getSortIndicator("status")}
+                      </button>
+                    </th>
+                    <th>Actions</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {paginatedVisibleProblems.map((problem) => {
+                    const client = clientsById[problem.clientId];
+                    const isExpanded = Boolean(expandedStatementsByProblem[problem.id]);
+                    return (
+                      <tr key={problem.id} className="problem-row">
+                        <td>{problem.problemCodeName || "UNASSIGNED"}</td>
+                        <td>
+                          <div className="problem-title">{problem.title}</div>
+                          <button
+                            type="button"
+                            className={`problem-statement-toggle ${isExpanded ? "is-expanded" : ""}`}
+                            onClick={() => toggleStatementExpand(problem.id)}
+                            aria-expanded={isExpanded}
+                          >
+                            <pre className="problem-statement">{getLiveProblemStatement(problem)}</pre>
+                            <span className="problem-statement-toggle-label">
+                              {isExpanded ? "Show less" : "Show more"}
+                            </span>
+                          </button>
+                        </td>
+                        <td>
+                          <span className={`difficulty-badge difficulty-badge--${problem.difficulty.toLowerCase()}`}>
+                            {problem.difficulty}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="client-cell">
+                            <span className="client-chip">{client?.abbreviation || "N/A"}</span>
+                            <div className="client-info">
+                              <button
+                                className="info-icon"
+                                type="button"
+                                aria-label={client?.name || "Client not found"}
+                              >
+                                i
+                              </button>
+                              <span className="client-tooltip">{client?.name || "Client not found"}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td>{formatTimestamp(problem.createdAt)}</td>
+                        <td>{formatTimestamp(problem.updatedAt)}</td>
+                        <td>
+                          <select
+                            className="status-select"
+                            value={problem.status}
+                            onChange={(event) => handleStatusChange(problem.id, event.target.value)}
+                          >
+                            {STATUS_OPTIONS.map((status) => (
+                              <option key={status} value={status}>
+                                {status}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <div className="table-actions">
+                            <button
+                              className="primary-btn action-icon-btn"
+                              onClick={() => openProblemWorkspace(problem)}
+                              disabled={problem.status !== "Active"}
+                              title={problem.status !== "Active" ? "Open: only active problems can be opened" : "Open Problem"}
+                              aria-label={problem.status !== "Active" ? "Open problem disabled" : "Open problem"}
+                            >
+                              <span aria-hidden="true">▶</span>
+                            </button>
+                            <button
+                              className="ghost-btn action-icon-btn"
+                              onClick={() => openEditProblemModal(problem)}
+                              title="Edit Problem"
+                              aria-label="Edit problem"
+                            >
+                              <span aria-hidden="true">✎</span>
+                            </button>
+                            <button
+                              className="ghost-btn action-icon-btn"
+                              onClick={() => openSolutionModal(problem)}
+                              title="Manage Solutions"
+                              aria-label="Manage solutions"
+                            >
+                              <span aria-hidden="true">☰</span>
+                            </button>
+                            <button
+                              className="danger-btn action-icon-btn"
+                              onClick={() => handleDeleteProblem(problem.id)}
+                              title="Delete Problem"
+                              aria-label="Delete problem"
+                            >
+                              <span aria-hidden="true">✕</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!sortedVisibleProblems.length && (
+                    <tr>
+                      <td colSpan="8">No problems found for the current search.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="pagination-bar">
+              <div className="pagination-bar__left">
+                <label className="pagination-size">
+                  Rows
+                  <select
+                    value={String(dashboardPageSize)}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setDashboardPageSize(value === "all" ? "all" : Number(value));
+                    }}
+                  >
+                    {DASHBOARD_PAGE_SIZE_OPTIONS.map((size) => (
+                      <option key={String(size)} value={String(size)}>
+                        {size === "all" ? "All" : size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="pagination-bar__right">
+                <button
+                  className="ghost-btn"
+                  type="button"
+                  onClick={() => setDashboardPage((prev) => Math.max(1, prev - 1))}
+                  disabled={dashboardPageSize === "all" || dashboardPage <= 1 || !visibleProblemRecords}
+                >
+                  Prev
+                </button>
+                <span className="pagination-page">
+                  Page {visibleProblemRecords ? dashboardPage : 0} of {visibleProblemRecords ? totalDashboardPages : 0}
+                </span>
+                <button
+                  className="ghost-btn"
+                  type="button"
+                  onClick={() => setDashboardPage((prev) => Math.min(totalDashboardPages, prev + 1))}
+                  disabled={
+                    dashboardPageSize === "all" || dashboardPage >= totalDashboardPages || !visibleProblemRecords
+                  }
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           </div>
 
           {isProblemModalOpen && (
@@ -1596,9 +2003,21 @@ export function App() {
               <div className="modal modal--fullscreen" onClick={(event) => event.stopPropagation()}>
                 <div className="modal__header">
                   <h2>Add Solutions - {solutionModalProblem.title}</h2>
-                  <button className="ghost-btn" type="button" onClick={closeSolutionModal}>
-                    Close
-                  </button>
+                  <div className="table-actions">
+                    <button
+                      className="ghost-btn action-icon-btn refresh-icon-btn"
+                      type="button"
+                      onClick={handleRefreshData}
+                      disabled={isDataLoading || isRefreshing}
+                      title="Refresh data from DB"
+                      aria-label="Refresh data from database"
+                    >
+                      <span aria-hidden="true">↻</span>
+                    </button>
+                    <button className="ghost-btn" type="button" onClick={closeSolutionModal}>
+                      Close
+                    </button>
+                  </div>
                 </div>
                 <div className="solutions-modal-layout">
                   <form className="solutions-form" onSubmit={handleAddSolutionFromModal}>

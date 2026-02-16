@@ -1,7 +1,7 @@
 const express = require("express");
 const Problem = require("../models/problem");
 const Client = require("../models/client");
-const { makeStableId } = require("../utils");
+const { makeStableId, makeUniqueProblemCodeName } = require("../utils");
 
 const router = express.Router();
 
@@ -26,8 +26,18 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ message: "clientId does not exist" });
   }
 
+  const [lastProblem, existingCodeNames] = await Promise.all([
+    Problem.findOne({}).sort({ problemNumber: -1 }).lean(),
+    Problem.distinct("problemCodeName"),
+  ]);
+
+  const nextProblemNumber = Math.max((lastProblem?.problemNumber || 0) + 1, 1);
+  const nextCodeName = makeUniqueProblemCodeName(nextProblemNumber, new Set(existingCodeNames.filter(Boolean)));
+
   const created = await Problem.create({
     id: makeStableId(title),
+    problemNumber: nextProblemNumber,
+    problemCodeName: nextCodeName,
     title,
     statement,
     difficulty,

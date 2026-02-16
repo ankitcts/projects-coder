@@ -1453,8 +1453,17 @@ export function App() {
                 </button>
               </div>
             )}
-            <button className="ghost-btn theme-toggle" onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
-              {theme === "light" ? "Dark Mode" : "Light Mode"}
+            <button
+              className={`theme-switch ${theme === "dark" ? "is-dark" : ""}`}
+              type="button"
+              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+              title={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+              aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+              aria-pressed={theme === "dark"}
+            >
+              <span className="theme-switch__track" aria-hidden="true">
+                <span className="theme-switch__thumb">{theme === "light" ? "☀️" : "🌙"}</span>
+              </span>
             </button>
           </div>
         </div>
@@ -1707,7 +1716,7 @@ export function App() {
                 <thead>
                   <tr>
                     <th>Serial No.</th>
-                    <th>
+                    <th className="problem-column-cell">
                       <button type="button" className="th-sort-btn" onClick={() => toggleSort("title")}>
                         Problem {getSortIndicator("title")}
                       </button>
@@ -1747,7 +1756,7 @@ export function App() {
                     return (
                       <tr key={problem.id} className="problem-row">
                         <td>{problem.problemCodeName || "UNASSIGNED"}</td>
-                        <td>
+                        <td className="problem-column-cell">
                           <div className="problem-title">{problem.title}</div>
                           <button
                             type="button"

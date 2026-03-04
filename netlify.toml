@@ -4,6 +4,7 @@
 
 [build.environment]
   NODE_ENV = "production"
+  NPM_FLAGS = "--include=dev"
 
 [[redirects]]
   from = "/*"

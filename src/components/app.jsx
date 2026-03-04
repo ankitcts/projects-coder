@@ -382,10 +382,7 @@ const mergeProgressByRecency = (dbProgressMap = {}, localProgressMap = {}) => {
   return merged;
 };
 
-const API_BASE_URL =
-  typeof process !== "undefined" && process.env.REACT_APP_API_BASE_URL
-    ? process.env.REACT_APP_API_BASE_URL
-    : "";
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "";
 
 async function apiRequest(path, options = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {

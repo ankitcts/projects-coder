@@ -5,6 +5,7 @@
 [build.environment]
   NODE_ENV = "production"
   NPM_FLAGS = "--include=dev"
+  REACT_APP_API_BASE_URL = "https://projects-coder.onrender.com"
 
 [[redirects]]
   from = "/*"

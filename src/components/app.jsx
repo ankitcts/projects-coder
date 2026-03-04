@@ -382,13 +382,8 @@ const mergeProgressByRecency = (dbProgressMap = {}, localProgressMap = {}) => {
   return merged;
 };
 
-const API_BASE_URL =
-  typeof process !== "undefined" && process.env.REACT_APP_API_BASE_URL
-    ? process.env.REACT_APP_API_BASE_URL
-    : "";
-
 async function apiRequest(path, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(path, {
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
@@ -1421,7 +1416,7 @@ export function App() {
         [problemId]: payload,
       });
 
-      fetch(`${API_BASE_URL}/api/progress/${problemId}`, {
+      fetch(`/api/progress/${problemId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

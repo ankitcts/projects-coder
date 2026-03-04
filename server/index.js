@@ -1,3 +1,4 @@
+const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
@@ -12,16 +13,7 @@ dotenv.config({ path: `${__dirname}/.env` });
 const app = express();
 const port = process.env.PORT || 4000;
 
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
-  : ["http://localhost:3000", "http://localhost:8080"];
-
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    callback(new Error(`CORS blocked: ${origin}`));
-  },
-}));
+app.use(cors());
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
@@ -32,6 +24,13 @@ app.use("/api/clients", clientsRouter);
 app.use("/api/problems", problemsRouter);
 app.use("/api/solutions", solutionsRouter);
 app.use("/api/progress", progressRouter);
+
+// Serve frontend static files
+const publicDir = path.join(__dirname, "../public");
+app.use(express.static(publicDir));
+app.get("*", (_req, res) => {
+  res.sendFile(path.join(publicDir, "index.html"));
+});
 
 app.use((error, _req, res, _next) => {
   console.error(error);

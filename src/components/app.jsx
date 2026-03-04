@@ -156,6 +156,7 @@ const SOLUTION_SELECTION_STORAGE_KEY = "single_user_solution_selection_v1";
 const RUNTIME_USER_ID_STORAGE_KEY = "runtime_user_id_v1";
 const LEGACY_SOLUTIONS_STORAGE_KEY = "single_user_problem_solutions_v1";
 const LEGACY_PROGRESS_STORAGE_KEY = "single_user_problem_progress_v1";
+const RUNTIME_PROGRESS_STORAGE_PREFIX = "runtime_problem_progress_v2";
 
 const makeProblemForm = (defaultClientId = "") => ({
   title: "",
@@ -306,8 +307,88 @@ const parseLegacyProgress = () => {
   }
 };
 
+const getRuntimeProgressStorageKey = (runtimeUserId) => {
+  const normalizedUserId = String(runtimeUserId || "").trim();
+  if (!normalizedUserId) {
+    return "";
+  }
+  return `${RUNTIME_PROGRESS_STORAGE_PREFIX}:${normalizedUserId}`;
+};
+
+const parseRuntimeProgress = (runtimeUserId) => {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  const storageKey = getRuntimeProgressStorageKey(runtimeUserId);
+  if (!storageKey) {
+    return {};
+  }
+
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+
+    return parsed;
+  } catch (_error) {
+    return {};
+  }
+};
+
+const writeRuntimeProgress = (runtimeUserId, progressMap) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const storageKey = getRuntimeProgressStorageKey(runtimeUserId);
+  if (!storageKey) {
+    return;
+  }
+
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(progressMap || {}));
+  } catch (_error) {
+    // Ignore local storage write errors.
+  }
+};
+
+const getTimestampValue = (value) => {
+  const timestamp = new Date(value || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const mergeProgressByRecency = (dbProgressMap = {}, localProgressMap = {}) => {
+  const merged = { ...(dbProgressMap || {}) };
+
+  Object.entries(localProgressMap || {}).forEach(([problemId, localRecord]) => {
+    const dbRecord = merged[problemId];
+    if (!dbRecord || getTimestampValue(localRecord?.updatedAt) >= getTimestampValue(dbRecord?.updatedAt)) {
+      merged[problemId] = {
+        codeByLanguage: localRecord?.codeByLanguage || {},
+        language: localRecord?.language || "js",
+        output: Array.isArray(localRecord?.output) ? localRecord.output : [],
+        updatedAt: localRecord?.updatedAt || new Date().toISOString(),
+      };
+    }
+  });
+
+  return merged;
+};
+
+const API_BASE_URL =
+  typeof process !== "undefined" && process.env.REACT_APP_API_BASE_URL
+    ? process.env.REACT_APP_API_BASE_URL
+    : "";
+
 async function apiRequest(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
@@ -493,7 +574,6 @@ export function App() {
   });
   const [problemProgress, setProblemProgress] = useState({});
   const [isRunning, setIsRunning] = useState(false);
-  const debounceTimerRef = useRef();
   const progressPersistTimerRef = useRef();
   const runTokenRef = useRef(0);
 
@@ -573,10 +653,35 @@ export function App() {
           return;
         }
 
+        const dbProgressMap = mapProgressByProblem(nextProgress);
+        const localProgressMap = parseRuntimeProgress(runtimeUserId);
+        const mergedProgressMap = mergeProgressByRecency(dbProgressMap, localProgressMap);
+        const staleLocalEntries = Object.entries(localProgressMap).filter(([problemId, localRecord]) => {
+          const dbRecord = dbProgressMap[problemId];
+          return getTimestampValue(localRecord?.updatedAt) > getTimestampValue(dbRecord?.updatedAt);
+        });
+
+        if (staleLocalEntries.length) {
+          void Promise.all(
+            staleLocalEntries.map(([problemId, localRecord]) =>
+              apiRequest(`/api/progress/${problemId}`, {
+                method: "PUT",
+                body: JSON.stringify({
+                  userId: runtimeUserId,
+                  codeByLanguage: localRecord?.codeByLanguage || {},
+                  language: localRecord?.language || "js",
+                  output: Array.isArray(localRecord?.output) ? localRecord.output : [],
+                  updatedAt: localRecord?.updatedAt || new Date().toISOString(),
+                }),
+              }).catch(() => null)
+            )
+          );
+        }
+
         setClients(fetchedClients || []);
         setProblems(fetchedProblems || []);
         setProblemSolutions(mapSolutionsByContext(nextSolutions));
-        setProblemProgress(mapProgressByProblem(nextProgress));
+        setProblemProgress(mergedProgressMap);
         setProblemForm((prev) => ({
           ...prev,
           clientId: prev.clientId || fetchedClients?.[0]?.id || "",
@@ -790,7 +895,7 @@ export function App() {
 
     setCodeByLanguage(restoredCode);
     setLanguage(saved?.language || "js");
-    setOutput(saved?.output || ["Program ready. Click Run or start typing."]);
+    setOutput(saved?.output || ["Program ready. Click Run to execute."]);
     setIsSolutionsDrawerOpen(false);
     setSolutionsDrawerSide("left");
     setSolutionsDrawerWidth(40);
@@ -1251,29 +1356,20 @@ export function App() {
       return;
     }
 
-    clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = setTimeout(() => {
-      executeCode();
-    }, 450);
-
-    return () => clearTimeout(debounceTimerRef.current);
-  }, [selectedProblem, language, currentCode]);
-
-  useEffect(() => {
-    if (!selectedProblem) {
-      return;
-    }
-
-    setProblemProgress((prev) => ({
-      ...prev,
-      [selectedProblem.id]: {
-        codeByLanguage,
-        language,
-        output,
-        updatedAt: new Date().toISOString(),
-      },
-    }));
-  }, [selectedProblem, codeByLanguage, language, output]);
+    setProblemProgress((prev) => {
+      const nextProgress = {
+        ...prev,
+        [selectedProblem.id]: {
+          codeByLanguage,
+          language,
+          output,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+      writeRuntimeProgress(runtimeUserId, nextProgress);
+      return nextProgress;
+    });
+  }, [selectedProblem, codeByLanguage, language, output, runtimeUserId]);
 
   useEffect(() => {
     localStorage.setItem(SOLUTION_SELECTION_STORAGE_KEY, JSON.stringify(selectedSolutionByContext));
@@ -1303,6 +1399,46 @@ export function App() {
     }, 700);
 
     return () => clearTimeout(progressPersistTimerRef.current);
+  }, [selectedProblem, runtimeUserId, codeByLanguage, language, output]);
+
+  useEffect(() => {
+    if (!selectedProblem || !runtimeUserId || typeof window === "undefined") {
+      return;
+    }
+
+    const problemId = selectedProblem.id;
+    const payload = {
+      codeByLanguage,
+      language,
+      output,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const flushLatestProgress = () => {
+      const localProgressMap = parseRuntimeProgress(runtimeUserId);
+      writeRuntimeProgress(runtimeUserId, {
+        ...localProgressMap,
+        [problemId]: payload,
+      });
+
+      fetch(`${API_BASE_URL}/api/progress/${problemId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: runtimeUserId,
+          ...payload,
+        }),
+        keepalive: true,
+      }).catch(() => null);
+    };
+
+    window.addEventListener("beforeunload", flushLatestProgress);
+    window.addEventListener("pagehide", flushLatestProgress);
+
+    return () => {
+      window.removeEventListener("beforeunload", flushLatestProgress);
+      window.removeEventListener("pagehide", flushLatestProgress);
+    };
   }, [selectedProblem, runtimeUserId, codeByLanguage, language, output]);
 
   useEffect(() => {

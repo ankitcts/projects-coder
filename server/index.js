@@ -12,7 +12,16 @@ dotenv.config({ path: `${__dirname}/.env` });
 const app = express();
 const port = process.env.PORT || 4000;
 
-app.use(cors());
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+  : ["http://localhost:3000", "http://localhost:8080"];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS blocked: ${origin}`));
+  },
+}));
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => {

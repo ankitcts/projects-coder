@@ -543,8 +543,9 @@ export function App() {
   const [userName, setUserName] = useState("");
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [loginNameInput, setLoginNameInput] = useState("");
+  const [activeMobileTab, setActiveMobileTab] = useState("editor");
   const [isMobileViewport, setIsMobileViewport] = useState(() =>
-    typeof window !== "undefined" ? window.innerWidth <= 1024 : false
+    typeof window !== "undefined" ? window.innerWidth <= 640 : false
   );
   const [codeByLanguage, setCodeByLanguage] = useState(DEFAULT_CODE);
   const [output, setOutput] = useState(["Pick a problem to begin."]);
@@ -722,12 +723,22 @@ export function App() {
       event.preventDefault();
       const name = loginNameInput.trim();
       if (!name) return;
+      // Collect browser fingerprint to make userId unique across same-name users
+      const fingerprint = {
+        ua: navigator.userAgent,
+        lang: navigator.language,
+        sw: screen.width,
+        sh: screen.height,
+        cd: screen.colorDepth,
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        cpu: navigator.hardwareConcurrency || 0,
+      };
       try {
         const res = await fetch("/api/session", {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, fingerprint }),
         });
         const { userId, name: savedName } = await res.json();
         localStorage.setItem(RUNTIME_USER_ID_STORAGE_KEY, userId);
@@ -937,6 +948,10 @@ export function App() {
     setSolutionsDrawerWidth(40);
     setActivePage("dashboard");
     setSelectedProblem(problem);
+    // On mobile: open problem sheet immediately so user reads it first
+    if (window.innerWidth <= 640) {
+      setActiveMobileTab("problem");
+    }
     if (syncRoute) {
       setRouteHash(getLiveRouteHash(problem));
     }
@@ -1516,7 +1531,7 @@ export function App() {
 
   useEffect(() => {
     const onResize = () => {
-      setIsMobileViewport(window.innerWidth <= 1024);
+      setIsMobileViewport(window.innerWidth <= 640);
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -1654,9 +1669,9 @@ export function App() {
         <section className="workspace">
           <div className="workspace__topbar">
             <button className="ghost-btn" onClick={() => navigateToDashboard()}>
-              Back to dashboard
+              {isMobileViewport ? "← Back" : "Back to dashboard"}
             </button>
-            <label htmlFor="language">Language</label>
+            {!isMobileViewport && <label htmlFor="language">Language</label>}
             <select id="language" value={language} onChange={(event) => setLanguage(event.target.value)}>
               {LANGUAGES.map((entry) => (
                 <option key={entry.id} value={entry.id}>
@@ -1665,32 +1680,37 @@ export function App() {
               ))}
             </select>
             <button className="primary-btn" onClick={executeCode}>
-              Run
+              {isMobileViewport ? "▶ Run" : "Run"}
             </button>
-            <button className="ghost-btn" onClick={() => setIsSolutionsDrawerOpen((prev) => !prev)}>
-              {isSolutionsDrawerOpen ? "Hide Solutions" : "Solutions"}
-            </button>
-            {isSolutionsDrawerOpen && (
-              <button
-                className="ghost-btn"
-                onClick={() => setSolutionsDrawerSide((prev) => (prev === "right" ? "left" : "right"))}
-              >
-                {solutionsDrawerSide === "right" ? "Dock Left" : "Dock Right"}
-              </button>
-            )}
-            {isSolutionsDrawerOpen && (
-              <label className="drawer-width-control">
-                Drawer Width
-                <input
-                  type="range"
-                  min="30"
-                  max="70"
-                  step="1"
-                  value={solutionsDrawerWidth}
-                  onChange={(event) => setSolutionsDrawerWidth(Number(event.target.value))}
-                />
-                <span>{solutionsDrawerWidth}%</span>
-              </label>
+            {/* Desktop-only: solutions drawer controls */}
+            {!isMobileViewport && (
+              <>
+                <button className="ghost-btn" onClick={() => setIsSolutionsDrawerOpen((prev) => !prev)}>
+                  {isSolutionsDrawerOpen ? "Hide Solutions" : "Solutions"}
+                </button>
+                {isSolutionsDrawerOpen && (
+                  <button
+                    className="ghost-btn"
+                    onClick={() => setSolutionsDrawerSide((prev) => (prev === "right" ? "left" : "right"))}
+                  >
+                    {solutionsDrawerSide === "right" ? "Dock Left" : "Dock Right"}
+                  </button>
+                )}
+                {isSolutionsDrawerOpen && (
+                  <label className="drawer-width-control">
+                    Drawer Width
+                    <input
+                      type="range"
+                      min="30"
+                      max="70"
+                      step="1"
+                      value={solutionsDrawerWidth}
+                      onChange={(event) => setSolutionsDrawerWidth(Number(event.target.value))}
+                    />
+                    <span>{solutionsDrawerWidth}%</span>
+                  </label>
+                )}
+              </>
             )}
             <button
               className="ghost-btn action-icon-btn refresh-icon-btn"
@@ -1706,15 +1726,31 @@ export function App() {
           </div>
 
           <div className="workspace__grid">
-            <article className="panel problem-panel">
-              <pre className="problem-statement-block">{getLiveProblemStatement(selectedProblem)}</pre>
-            </article>
+            {/* Desktop only: problem panel in grid */}
+            {!isMobileViewport && (
+              <article className="panel problem-panel">
+                <pre className="problem-statement-block">{getLiveProblemStatement(selectedProblem)}</pre>
+              </article>
+            )}
 
+            {/* Editor: always visible (desktop + mobile) */}
             <article className="panel editor-panel">
-              <h2 className="panel-title">Editor ({language})</h2>
+              {/* Mobile: tap to open problem as a bottom sheet */}
+              {isMobileViewport && (
+                <button
+                  className="mobile-problem-strip"
+                  onClick={() => setActiveMobileTab("problem")}
+                  type="button"
+                >
+                  <span className="mobile-problem-strip__icon">📄</span>
+                  <span className="mobile-problem-strip__title">{selectedProblem?.title || "Problem"}</span>
+                  <span className="mobile-problem-strip__chevron">›</span>
+                </button>
+              )}
+              {!isMobileViewport && <h2 className="panel-title">Editor ({language})</h2>}
               <div
                 className={`editor-with-solutions ${
-                  isSolutionsDrawerOpen
+                  isSolutionsDrawerOpen && !isMobileViewport
                     ? `editor-with-solutions--drawer-open editor-with-solutions--${solutionsDrawerSide}`
                     : ""
                 }`}
@@ -1742,11 +1778,82 @@ export function App() {
               </div>
             </article>
 
-            <article className="panel console-panel">
-              <h2 className="panel-title">Console Output</h2>
-              <pre className="console">{output.join("\n")}</pre>
-            </article>
+            {/* Desktop only: console panel in grid */}
+            {!isMobileViewport && (
+              <article className="panel console-panel">
+                <h2 className="panel-title">Console Output</h2>
+                <pre className="console">{output.join("\n")}</pre>
+              </article>
+            )}
           </div>
+
+          {/* Mobile bottom tab bar */}
+          {isMobileViewport && (
+            <nav className="mobile-workspace-tabs">
+              <button
+                className={`mobile-tab-btn${activeMobileTab === "editor" ? " mobile-tab-btn--active" : ""}`}
+                onClick={() => setActiveMobileTab("editor")}
+              >
+                <span className="mobile-tab-icon">💻</span>
+                <span className="mobile-tab-label">Code</span>
+              </button>
+              <button
+                className={`mobile-tab-btn${activeMobileTab === "problem" ? " mobile-tab-btn--active" : ""}`}
+                onClick={() => setActiveMobileTab("problem")}
+              >
+                <span className="mobile-tab-icon">📄</span>
+                <span className="mobile-tab-label">Problem</span>
+              </button>
+              <button
+                className={`mobile-tab-btn${activeMobileTab === "console" ? " mobile-tab-btn--active" : ""}`}
+                onClick={() => setActiveMobileTab("console")}
+              >
+                <span className="mobile-tab-icon">⚡</span>
+                <span className="mobile-tab-label">Console</span>
+              </button>
+              <button
+                className={`mobile-tab-btn${isSolutionsDrawerOpen ? " mobile-tab-btn--active" : ""}`}
+                onClick={() => setIsSolutionsDrawerOpen((v) => !v)}
+              >
+                <span className="mobile-tab-icon">☰</span>
+                <span className="mobile-tab-label">Solutions</span>
+              </button>
+            </nav>
+          )}
+
+          {/* Mobile: Problem bottom sheet */}
+          {isMobileViewport && activeMobileTab === "problem" && (
+            <div className="mobile-sheet-backdrop" onClick={() => setActiveMobileTab("editor")}>
+              <div className="mobile-sheet" onClick={(e) => e.stopPropagation()}>
+                <div className="mobile-sheet-handle" />
+                <div className="mobile-sheet-header">
+                  <span className="mobile-sheet-title">{selectedProblem?.title || "Problem"}</span>
+                  <button className="mobile-sheet-done" onClick={() => setActiveMobileTab("editor")}>Done</button>
+                </div>
+                <div className="mobile-sheet-body">
+                  <pre className="problem-statement-block">{getLiveProblemStatement(selectedProblem)}</pre>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Mobile: Console bottom sheet */}
+          {isMobileViewport && activeMobileTab === "console" && (
+            <div className="mobile-sheet-backdrop" onClick={() => setActiveMobileTab("editor")}>
+              <div className="mobile-sheet" onClick={(e) => e.stopPropagation()}>
+                <div className="mobile-sheet-handle" />
+                <div className="mobile-sheet-header">
+                  <span className="mobile-sheet-title">Console Output</span>
+                  <button className="mobile-sheet-done" onClick={() => setActiveMobileTab("editor")}>Done</button>
+                </div>
+                <div className="mobile-sheet-body mobile-sheet-body--console">
+                  <pre className="console">{output.join("\n")}</pre>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Desktop: solutions drawer */}
           {isSolutionsDrawerOpen && !isMobileViewport && (
             <aside
               className={`solutions-panel solutions-panel--drawer solutions-panel--${solutionsDrawerSide}`}
@@ -1755,16 +1862,18 @@ export function App() {
               {solutionsPanelContent}
             </aside>
           )}
+          {/* Mobile: Solutions bottom sheet */}
           {isSolutionsDrawerOpen && isMobileViewport && (
-            <div className="modal-backdrop modal-backdrop--fullscreen" onClick={() => setIsSolutionsDrawerOpen(false)}>
-              <div className="modal modal--mobile-solutions" onClick={(event) => event.stopPropagation()}>
-                <div className="modal__header">
-                  <h2>Solutions</h2>
-                  <button className="ghost-btn" type="button" onClick={() => setIsSolutionsDrawerOpen(false)}>
-                    Close
-                  </button>
+            <div className="mobile-sheet-backdrop" onClick={() => setIsSolutionsDrawerOpen(false)}>
+              <div className="mobile-sheet mobile-sheet--tall" onClick={(e) => e.stopPropagation()}>
+                <div className="mobile-sheet-handle" />
+                <div className="mobile-sheet-header">
+                  <span className="mobile-sheet-title">Solutions</span>
+                  <button className="mobile-sheet-done" onClick={() => setIsSolutionsDrawerOpen(false)}>Done</button>
                 </div>
-                <div className="solutions-panel solutions-panel--modal">{solutionsPanelContent}</div>
+                <div className="mobile-sheet-body mobile-sheet-body--solutions">
+                  <div className="solutions-panel solutions-panel--modal">{solutionsPanelContent}</div>
+                </div>
               </div>
             </div>
           )}
@@ -1888,7 +1997,41 @@ export function App() {
           )}
 
           <div className="dashboard-table-area">
-            <div className="table-scroll">
+            {isMobileViewport && (
+              <div className="problem-cards">
+                {paginatedVisibleProblems.map((problem) => {
+                  const client = clientsById[problem.clientId];
+                  return (
+                    <div key={problem.id} className="problem-card">
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                          <span className={`difficulty-badge difficulty-badge--${problem.difficulty.toLowerCase()}`}>
+                            {problem.difficulty}
+                          </span>
+                          <span className="client-chip">{client?.abbreviation || "N/A"}</span>
+                          <span className="problem-card__code">{problem.problemCodeName || ""}</span>
+                        </div>
+                        <div className="problem-card__title">{problem.title}</div>
+                      </div>
+                      <div className="problem-card__actions">
+                        <button
+                          className="primary-btn"
+                          onClick={() => selectProblem(problem)}
+                          disabled={problem.status !== "Active"}
+                        >
+                          Open
+                        </button>
+                        <button className="ghost-btn action-icon-btn" onClick={() => openEditProblemModal(problem)}>✎</button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!paginatedVisibleProblems.length && (
+                  <p className="hint-text">No problems found.</p>
+                )}
+              </div>
+            )}
+            <div className={`table-scroll${isMobileViewport ? " desktop-only" : ""}`}>
               <table className="problem-table">
                 <thead>
                   <tr>

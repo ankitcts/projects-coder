@@ -185,21 +185,9 @@ const getSolutionContextKey = (problemId, language) => {
 };
 
 const getOrCreateRuntimeUserId = () => {
-  if (typeof window === "undefined") {
-    return "runtime-user";
-  }
-
-  const existing = localStorage.getItem(RUNTIME_USER_ID_STORAGE_KEY);
-  if (existing) {
-    return existing;
-  }
-
-  const generated =
-    typeof crypto !== "undefined" && crypto.randomUUID
-      ? `runtime-${crypto.randomUUID()}`
-      : `runtime-${Date.now()}`;
-  localStorage.setItem(RUNTIME_USER_ID_STORAGE_KEY, generated);
-  return generated;
+  // Legacy localStorage fallback (used only if session API fails)
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(RUNTIME_USER_ID_STORAGE_KEY) || null;
 };
 
 const mapSolutionsByContext = (solutions = []) => {
@@ -551,7 +539,10 @@ export function App() {
   const [isSolutionsDrawerOpen, setIsSolutionsDrawerOpen] = useState(false);
   const [solutionsDrawerSide, setSolutionsDrawerSide] = useState("left");
   const [solutionsDrawerWidth, setSolutionsDrawerWidth] = useState(40);
-  const [runtimeUserId] = useState(getOrCreateRuntimeUserId);
+  const [runtimeUserId, setRuntimeUserId] = useState(getOrCreateRuntimeUserId);
+  const [userName, setUserName] = useState("");
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [loginNameInput, setLoginNameInput] = useState("");
   const [isMobileViewport, setIsMobileViewport] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth <= 1024 : false
   );
@@ -588,6 +579,7 @@ export function App() {
 
   const fetchDataFromDb = useCallback(
     async (options = {}) => {
+      if (!runtimeUserId) return;
       const { isMountedCheck = () => true } = options;
       try {
         setIsDataLoading(true);
@@ -700,6 +692,55 @@ export function App() {
     await fetchDataFromDb();
     setIsRefreshing(false);
   }, [fetchDataFromDb]);
+
+  // On mount: restore session from server cookie or show login modal
+  useEffect(() => {
+    fetch("/api/session", { credentials: "include" })
+      .then((r) => r.json())
+      .then(({ userId, name }) => {
+        if (userId) {
+          localStorage.setItem(RUNTIME_USER_ID_STORAGE_KEY, userId);
+          setRuntimeUserId(userId);
+          setUserName(name);
+        } else {
+          setIsLoginModalOpen(true);
+        }
+      })
+      .catch(() => {
+        // If session API fails, fall back to localStorage UUID
+        const fallback = localStorage.getItem(RUNTIME_USER_ID_STORAGE_KEY);
+        if (fallback) {
+          setRuntimeUserId(fallback);
+        } else {
+          setIsLoginModalOpen(true);
+        }
+      });
+  }, []);
+
+  const handleLoginSubmit = useCallback(
+    async (event) => {
+      event.preventDefault();
+      const name = loginNameInput.trim();
+      if (!name) return;
+      try {
+        const res = await fetch("/api/session", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        const { userId, name: savedName } = await res.json();
+        localStorage.setItem(RUNTIME_USER_ID_STORAGE_KEY, userId);
+        setRuntimeUserId(userId);
+        setUserName(savedName);
+        setIsLoginModalOpen(false);
+        setLoginNameInput("");
+      } catch (err) {
+        console.error("Session error:", err);
+      }
+    },
+    [loginNameInput]
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -1568,6 +1609,11 @@ export function App() {
         <div className="platform__header-row">
           <h1>Live Coding Dashboard</h1>
           <div className="platform__header-actions">
+            {userName && (
+              <span style={{ fontSize: "0.8rem", opacity: 0.7, marginRight: 8 }}>
+                👤 {userName}
+              </span>
+            )}
             {!selectedProblem && (
               <div className="view-switch">
                 <button
@@ -2266,6 +2312,35 @@ export function App() {
             </div>
           )}
         </section>
+      )}
+
+      {isLoginModalOpen && (
+        <div className="modal-backdrop" style={{ zIndex: 9999 }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 380 }}>
+            <div className="modal__header">
+              <h2>Welcome</h2>
+            </div>
+            <form className="add-problem-form" onSubmit={handleLoginSubmit}>
+              <label>
+                Enter your name to continue
+                <input
+                  type="text"
+                  placeholder="e.g. Alex"
+                  value={loginNameInput}
+                  onChange={(e) => setLoginNameInput(e.target.value)}
+                  autoFocus
+                  required
+                />
+              </label>
+              <p style={{ fontSize: "0.8rem", opacity: 0.7, margin: "0 0 8px" }}>
+                Use the same name on any device to restore your progress.
+              </p>
+              <div className="modal__footer">
+                <button type="submit" className="primary-btn">Start Coding</button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

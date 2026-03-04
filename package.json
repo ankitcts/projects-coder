@@ -15,6 +15,7 @@
     "@monaco-editor/react": "^4.7.0",
     "clean-webpack-plugin": "^4.0.0",
     "concurrently": "^9.2.1",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
@@ -23,7 +24,6 @@
     "react": "^16.14.0",
     "react-dom": "^16.14.0",
     "typescript": "^5.7.3"
-    
   },
   "engines": {
     "node": ">=18.0.0"

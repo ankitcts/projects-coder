@@ -2463,8 +2463,8 @@ export function App() {
             <div className="modal__header">
               <h2>Welcome</h2>
             </div>
-            <form className="add-problem-form" onSubmit={handleLoginSubmit}>
-              <label>
+            <form onSubmit={handleLoginSubmit} style={{ display: "flex", flexDirection: "column", gap: 10, padding: "0 0 4px" }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.86rem", fontWeight: 500, color: "var(--md-muted)" }}>
                 Enter your name to continue
                 <input
                   type="text"
@@ -2473,9 +2473,10 @@ export function App() {
                   onChange={(e) => setLoginNameInput(e.target.value)}
                   autoFocus
                   required
+                  style={{ border: "1px solid var(--md-border)", borderRadius: 8, padding: "8px 10px", fontSize: "0.9rem", color: "var(--md-text)", background: "var(--md-surface)", fontFamily: "inherit" }}
                 />
               </label>
-              <p style={{ fontSize: "0.8rem", opacity: 0.7, margin: "0 0 8px" }}>
+              <p style={{ fontSize: "0.8rem", opacity: 0.7, margin: 0 }}>
                 Use the same name on any device to restore your progress.
               </p>
               <div className="modal__footer">
